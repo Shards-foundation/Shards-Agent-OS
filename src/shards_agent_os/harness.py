@@ -6,6 +6,7 @@ It atomically binds each approved stage to the existing kernel-governed OS queue
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from typing import Any
@@ -35,6 +36,13 @@ def _connect(db_path: str):
             status TEXT NOT NULL, job_id TEXT UNIQUE,
             PRIMARY KEY(task_id,ordinal),
             FOREIGN KEY(task_id) REFERENCES harness_tasks(task_id))""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS harness_read_jobs (
+            job_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, ordinal INTEGER NOT NULL,
+            repository TEXT NOT NULL, status TEXT NOT NULL,
+            report_json TEXT, root_hash TEXT,
+            created_at_ms INTEGER NOT NULL, started_at_ms INTEGER, finished_at_ms INTEGER,
+            UNIQUE(task_id,ordinal),
+            FOREIGN KEY(task_id,ordinal) REFERENCES harness_steps(task_id,ordinal))""")
         conn.commit()
         return conn
     except BaseException:
@@ -46,6 +54,22 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
+_READ_TOOL = "github.list_workflow_runs"
+_REPO_NAME = re.compile(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}")
+
+
+def _validate_read_step(tool: object, port: object, arguments: object) -> None:
+    if tool != _READ_TOOL or type(port) is not int or port != 0:
+        raise ValueError("Unsupported read-only step")
+    if type(arguments) is not dict or set(arguments) != {"repository"}:
+        raise ValueError("Read step requires exactly a repository")
+    repo = arguments["repository"]
+    if type(repo) is not str or not _REPO_NAME.fullmatch(repo):
+        raise ValueError("Invalid repository")
+    if any(p in (".", "..") or p.startswith(".") for p in repo.split("/")):
+        raise ValueError("Invalid repository component")
+
+
 def _steps_checked(steps: list[dict[str, Any]]) -> list[tuple[str, int, str]]:
     if type(steps) is not list or not 1 <= len(steps) <= 32:
         raise ValueError("Supply between 1 and 32 steps")
@@ -54,7 +78,10 @@ def _steps_checked(steps: list[dict[str, Any]]) -> list[tuple[str, int, str]]:
         if type(item) is not dict or set(item) != {"tool", "port", "arguments"}:
             raise ValueError("Step must contain exactly tool, port and arguments")
         tool, port, args = item["tool"], item["port"], item["arguments"]
-        _validate_job(tool, args, port, "/nonexistent/permit-not-yet-issued.json")
+        if tool == _READ_TOOL:
+            _validate_read_step(tool, port, args)
+        else:
+            _validate_job(tool, args, port, "/nonexistent/permit-not-yet-issued.json")
         checked.append((tool, port, json.dumps(args, sort_keys=True, separators=(",", ":"), allow_nan=False)))
     return checked
 
@@ -109,7 +136,10 @@ def _refresh_locked(conn, task_id: str) -> str:
     for stage in stages:
         new = stage["status"]
         if stage["job_id"]:
-            job = conn.execute("SELECT status FROM jobs WHERE job_id=?", (stage["job_id"],)).fetchone()
+            table = "harness_read_jobs" if stage["tool"] == _READ_TOOL else "jobs"
+            job = conn.execute(
+                f"SELECT status FROM {table} WHERE job_id=?", (stage["job_id"],)
+            ).fetchone()
             new = _JOB_TO_STEP.get(job["status"]) if job else None
             if new is None:
                 new = "UNKNOWN"  # Deleted or unrecognised job: never assume success.
@@ -176,6 +206,8 @@ def release_step(db_path: str, *, task_id: str, ordinal: int, permit_file: str) 
         step = steps[ordinal]
         if step["status"] != "WAITING_PERMIT" or step["job_id"] is not None:
             raise ValueError("Step already dispatched or not eligible")
+        if step["tool"] == _READ_TOOL:
+            raise ValueError("Read-only steps require release_read_step")
         args = json.loads(step["arguments_json"])
         _validate_job(step["tool"], args, step["port"], permit_file)
         if conn.execute("SELECT 1 FROM jobs WHERE permit_file=? LIMIT 1", (permit_file,)).fetchone():
