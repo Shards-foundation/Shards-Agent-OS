@@ -136,7 +136,7 @@ class DurableProcessRecoveryTests(unittest.TestCase):
             )
             conn.execute(
                 "INSERT INTO harness_read_evidence VALUES (?,?)",
-                (self.job_id, encoded_evidence.replace('"a"*', '"b"*')),
+                (self.job_id, encoded_evidence),
             )
             # The stored evidence is changed after the successful write;
             # its declared root no longer agrees with the report.
