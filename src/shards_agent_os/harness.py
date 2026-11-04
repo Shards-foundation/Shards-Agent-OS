@@ -46,6 +46,10 @@ def _connect(db_path: str):
         conn.execute("""CREATE TABLE IF NOT EXISTS harness_read_evidence (
             job_id TEXT PRIMARY KEY, evidence_json TEXT NOT NULL,
             FOREIGN KEY(job_id) REFERENCES harness_read_jobs(job_id))""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS harness_read_incidents (
+            job_id TEXT PRIMARY KEY, incident_id TEXT NOT NULL,
+            reconciled_at_ms INTEGER NOT NULL,
+            FOREIGN KEY(job_id) REFERENCES harness_read_jobs(job_id))""")
         conn.commit()
         return conn
     except BaseException:
