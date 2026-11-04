@@ -1,6 +1,6 @@
 # Shards Agent OS
 
-**Status: v0.2.0 experimental, single-host reference runtime.** A Python application-level operating environment built on [Shards-Kernel](https://github.com/Shards-foundation/Shards-kernel), not a hardware operating system or an independently certified agent sandbox.
+**Status: v0.3.0 experimental, single-host reference runtime.** A Python application-level operating environment built on [Shards-Kernel](https://github.com/Shards-foundation/Shards-kernel), not a hardware operating system or an independently certified agent sandbox.
 
 Shards-Kernel retains the independent execution authority. Shards Agent OS manages _when_ approved operations are attempted, stores local operator-controlled memory, records local agent and device metadata, and stops accepting new work when an operator halts dispatch. It does **not** sign permits, run unrestricted tools, replace the host operating system or bypass Shards-Kernel. Its upstream signed local operator currently executes only `echo` and `add`.
 
@@ -8,7 +8,7 @@ Shards-Kernel retains the independent execution authority. Shards Agent OS manag
 
 | Subsystem | Operational boundary |
 |---|---|
-| Scheduling | Persistent one-shot due-time jobs, atomic SQLite claims, a polling `serve` worker and maximum running-job quota |
+| Scheduling | Persistent one-shot jobs, atomic claims, polling worker, running-job quota, and inert interval schedule templates that require fresh independently authorised permits per occurrence |
 | Execution | Delegation solely through Shards-Kernel's official local `mcp-call` CLI with independently issued signed permits |
 | Interrupts | Durable local halt/resume latch stops **new claims**, and cancellation is allowed only for pending jobs; running tool calls cannot be preempted |
 | Memory | Operator-only typed JSON records (working/episodic/semantic/procedural labels), partitions, provenance, TTL, deletion and optimistic version checks; no vector search or learned reasoning |
@@ -16,7 +16,7 @@ Shards-Kernel retains the independent execution authority. Shards Agent OS manag
 | Recovery | Never automatically retries an ambiguous, timed-out or crashed operation; preserves `RUNNING` / `UNKNOWN` for operator reconciliation |
 | Observability | Sanitised job states, counts and control status; does not replace Shards-Kernel's hash-chained audit ledger |
 
-This project intentionally does not offer cron-triggered unapproved execution: kernel permits are valid only for their exact actions, have short validity windows, and are single-use. Each new scheduled execution requires its own independent authorisation.
+An interval schedule **never executes automatically**. Kernel permits are single-use and constrained to an exact action. Every released occurrence requires a separately issued, freshly scoped permit. A missed occurrence is skipped, not replayed; this is deliberately not a cron issuer, and a schedule is not authorisation.
 
 ## Install
 
@@ -78,8 +78,45 @@ See [architecture](docs/ARCHITECTURE.md), [operator runbook](docs/OPERATIONS.md)
 
 - Device drivers, operating-system memory management, hardware interrupts, multi-host orchestration, arbitrary shell/network/wallet tools, semantic vector retrieval, privileged physical devices and agent LLMs are **not shipped**.
 - The database is local SQLite mode `0600` with WAL and synchronous full commits; the host, state directory, credentials and SQLite files must still be protected by OS-level controls. There is no encrypted memory store or independently anchored event ledger.
-- `halt` stops new scheduling claims but does **not** revoke a Shards-Kernel permit or abort external side effects. `resume` never revives a halted kernel instance. For a crash-stuck RUNNING task, the trusted operator can use `reconcile-unknown <job-id> --incident-id <reference>` after investigating the kernel audit and any live effects; this transitions only RUNNING to UNKNOWN and **never retries** it.
+- `halt` stops new scheduling claims but does **not** revoke a Shards-Kernel permit or abort external side effects. `resume` never revives a halted kernel instance.
 - If the worker crashes after claiming a job, it remains `RUNNING` and consumes capacity. Manual reconciliation with **independently trusted kernel evidence** is required. No automatic retries occur.
 - Intended for a local trusted operator. There is no public API or Internet-accessible service in this project.
 
 **License:** [Boost Software License 1.0](LICENSE), as selected for this repository. Shards-Kernel remains independently MIT licensed.
+
+## Interval scheduling (v0.3.0)
+
+Create a recurring **intent** without issuing a permit or executing a tool:
+
+```bash
+shards-agent-os --db "$DB" schedule-add --name heartbeat \
+  --every-ms 3600000 --window-ms 60000 --port 8765 \
+  --tool echo --arguments-json '{"text":"heartbeat"}'
+shards-agent-os --db "$DB" schedule-list
+shards-agent-os --db "$DB" schedule-due
+```
+
+When a template becomes due, an **independent** trusted operator must issue an unexpired
+single-use signed permit for the exact action/arguments. Copy its `schedule_id`
+from `schedule-list` and use:
+
+```bash
+shards-agent-os --db "$DB" schedule-release <schedule-id> \
+  --permit-file /absolute/path/to/fresh-independent-permit.json
+shards-agent-os --db "$DB" run-once
+```
+
+`<schedule-id>` above is a placeholder, not an angle-bracket literal to type.
+For downtime recovery use `schedule-skip <schedule-id>` to advance expired
+windows without consuming any permit or queuing work. Disable a template with
+`schedule-disable <schedule-id>` and re-enable with `schedule-enable <schedule-id>`.
+Both template state and the SQLite schedule-clock high-water mark persist across
+restarts. A clock rollback fails closed until the operator investigates the
+underlying clock/state discrepancy. Host clock integrity and local DB trust
+are *not* cryptographic time guarantees.
+
+Schedule release is a deliberate operator action and does **not** automatically
+create signing credentials, run an LLM, access devices or bypass Shards-Kernel.
+The same permit file path is rejected for repeated template releases, but only
+Shards-Kernel verifies permit signatures and cryptographic replay constraints.
+The private state directory must be mode 0700 to protect SQLite WAL files.
