@@ -1,3 +1,3 @@
-"""Shards Agent OS — application-level agent execution scheduler."""
+"""Shards Agent OS — single-host governed agent runtime."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
