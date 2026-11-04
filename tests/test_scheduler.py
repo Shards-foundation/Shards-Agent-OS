@@ -76,8 +76,12 @@ class SchedulerTests(unittest.TestCase):
 
     def test_crashed_running_job_remains_unreplayable(self):
         self.add()
-        with sqlite3.connect(self.db) as conn:
-            conn.execute("UPDATE jobs SET status='RUNNING'")
+        conn = sqlite3.connect(self.db)
+        try:
+            with conn:
+                conn.execute("UPDATE jobs SET status='RUNNING'")
+        finally:
+            conn.close()
         self.assertIsNone(run_once(self.db, now_ms=100))
         self.assertEqual(list_jobs(self.db)[0]["status"], "RUNNING")
 

@@ -8,16 +8,21 @@ permissions:
 jobs:
   tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install application and pinned Shards-Kernel source
+      - name: Install application and immutable Shards-Kernel dependency
         run: python -m pip install -e '.[kernel]'
-      - name: Unit tests
-        run: python -m unittest discover -s tests -v
-      - name: Verify installed kernel CLI
+      - name: Assert live integration prerequisites
+        run: python -c 'import shards_agent_os, shards_kernel, mcp, cryptography; print("All live test dependencies installed")'
+      - name: Unit and real-process signed MCP integration tests
+        run: python -Werror::ResourceWarning -m unittest discover -s tests -v
+      - name: Verify installed kernel CLI and offline permit demo
         run: |
           python -m shards_kernel --version
           python -m shards_kernel demo --json
+      - name: Compile app
+        run: python -m compileall -q src/shards_agent_os
