@@ -187,8 +187,10 @@ def get_read_job(db_path: str, job_id: str) -> dict:
         raise ValueError("Invalid job ID")
     with _connect(db_path) as conn:
         row = conn.execute(
-            "SELECT job_id,task_id,ordinal,repository,status,report_json,root_hash,"
-            "created_at_ms,started_at_ms,finished_at_ms FROM harness_read_jobs WHERE job_id=?",
+            "SELECT r.job_id,r.task_id,r.ordinal,r.repository,r.status,r.report_json,r.root_hash,"
+            "r.created_at_ms,r.started_at_ms,r.finished_at_ms,i.incident_id "
+            "FROM harness_read_jobs AS r LEFT JOIN harness_read_incidents AS i "
+            "ON i.job_id=r.job_id WHERE r.job_id=?",
             (job_id,),
         ).fetchone()
         if not row:
@@ -227,3 +229,43 @@ def get_read_evidence(db_path: str, job_id: str) -> dict:
         if row["root_hash"] != report["evidence_root_hash"]:
             raise ValueError("Persisted evidence root mismatch")
         return {"report": report, "evidence": evidence}
+
+
+_INCIDENT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{2,79}")
+
+
+def reconcile_read_unknown(db_path: str, *, job_id: str, incident_id: str) -> bool:
+    """Manually classify a crashed read job as UNKNOWN without repeating it.
+
+    WARNING: the operator must independently establish that the worker is
+    stopped. This function cannot detect remote in-flight work and does NOT
+    prove that the GitHub API request was or was not performed.
+
+    The incident reference and transition commit in the same SQLite
+    transaction. Return False when a job is not in RUNNING state.
+    """
+    if type(job_id) is not str or not _JOB_ID.fullmatch(job_id):
+        raise ValueError("Invalid observation job ID")
+    if type(incident_id) is not str or not _INCIDENT_ID.fullmatch(incident_id):
+        raise ValueError("Provide an incident reference with 3..80 safe characters")
+    with _connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT task_id FROM harness_read_jobs WHERE job_id=? AND status='RUNNING'",
+            (job_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        now = _now_ms()
+        changed = conn.execute(
+            "UPDATE harness_read_jobs SET status='UNKNOWN',finished_at_ms=? "
+            "WHERE job_id=? AND status='RUNNING'", (now, job_id),
+        )
+        if changed.rowcount != 1:
+            raise RuntimeError("Observation claim changed during reconciliation")
+        conn.execute(
+            "INSERT INTO harness_read_incidents (job_id,incident_id,reconciled_at_ms) "
+            "VALUES (?,?,?)", (job_id,incident_id,now),
+        )
+        _refresh_locked(conn, row["task_id"])
+        return True

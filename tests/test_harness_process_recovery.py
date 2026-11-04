@@ -19,6 +19,7 @@ from shards_agent_os.harness import create_task, refresh_task
 from shards_agent_os.harness_read import (
     get_read_evidence,
     get_read_job,
+    reconcile_read_unknown,
     release_read_step,
     run_read_job,
 )
@@ -149,6 +150,67 @@ class DurableProcessRecoveryTests(unittest.TestCase):
                    return_value=SimpleNamespace(is_valid=True)):
             with self.assertRaises(ValueError):
                 get_read_evidence(self.db, self.job_id)
+
+
+    def test_confirmed_stopped_worker_can_be_reconciled_without_replay(self):
+        child = self._child(
+            "import os,sys\n"
+            "from shards_agent_os.harness_read import run_read_job\n"
+            "def die(repo):\n"
+            "    os._exit(74)\n"
+            "run_read_job(sys.argv[1],job_id=sys.argv[2],inspector=die)\n"
+        )
+        self.assertEqual(child.returncode, 74, child.stderr)
+        self.assertEqual(refresh_task(self.db, self.task_id)["status"], "RUNNING")
+        # The test has confirmed the child process has exited. In production
+        # this is a human-verified precondition, not an automatic action.
+        self.assertTrue(reconcile_read_unknown(
+            self.db, job_id=self.job_id, incident_id="incident-20261104-001"
+        ))
+        self.assertEqual(refresh_task(self.db, self.task_id)["status"], "UNKNOWN")
+        record = get_read_job(self.db, self.job_id)
+        self.assertEqual(record["status"], "UNKNOWN")
+        self.assertEqual(record["incident_id"], "incident-20261104-001")
+        self.assertFalse(reconcile_read_unknown(
+            self.db, job_id=self.job_id, incident_id="incident-20261104-002"
+        ))
+        with self.assertRaises(ValueError):
+            run_read_job(self.db, job_id=self.job_id,
+                         inspector=lambda _: self.fail("Old job must never replay"))
+        # Capacity is now available for a NEW, independent read-only task.
+        next_task = create_task(self.db, name="New independent inspection", steps=[STEP])
+        next_job = release_read_step(self.db, task_id=next_task, ordinal=0)
+        def valid(repo):
+            root = "a" * 64
+            return ({
+                "schema": "shards-github-agent/report-v1",
+                "repository": repo, "operation": "github.list_workflow_runs",
+                "decision": "ALLOW", "status": "completed",
+                "issuer_mode": "local-ephemeral-read-only",
+                "checked": 0, "needs_attention": False, "failures": [],
+                "in_progress": [], "evidence_root_hash": root, "audit_entries": 1,
+            }, {"root_hash": root, "ledger_entries": [{"step": 1}]})
+        with patch("shards_kernel.api.verify_evidence_bundle",
+                   return_value=SimpleNamespace(is_valid=True)):
+            result = run_read_job(self.db, job_id=next_job, inspector=valid)
+        self.assertEqual(result["status"], "SUCCEEDED")
+        self.assertEqual(refresh_task(self.db, next_task)["status"], "SUCCEEDED")
+        self.assertEqual(refresh_task(self.db, self.task_id)["status"], "UNKNOWN")
+
+    def test_reconciliation_requires_real_running_claim_and_valid_incident(self):
+        with self.assertRaises(ValueError):
+            reconcile_read_unknown(
+                self.db, job_id=self.job_id, incident_id="x"
+            )
+        self.assertFalse(reconcile_read_unknown(
+            self.db, job_id=self.job_id, incident_id="incident-20261104-003"
+        ))
+        from shards_agent_os.harness_cli import main
+        self.assertEqual(
+            main(["--db", self.db, "reconcile-read-unknown", self.job_id,
+                  "--incident-id", "incident-20261104-003"]),
+            2,
+        )
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ import json
 import sys
 
 from .harness import create_task, get_task, list_tasks, refresh_task, release_step
+from .harness_read import reconcile_read_unknown
 
 
 def _strict_object(pairs):
@@ -38,6 +39,12 @@ def main(argv: list[str] | None = None) -> int:
     release.add_argument("task_id")
     release.add_argument("ordinal", type=int)
     release.add_argument("--permit-file", required=True)
+    reconcile = sub.add_parser(
+        "reconcile-read-unknown",
+        help="Operator-only: mark a confirmed stopped RUNNING GitHub read as UNKNOWN",
+    )
+    reconcile.add_argument("job_id")
+    reconcile.add_argument("--incident-id", required=True)
     args = parser.parse_args(argv)
     try:
         if args.action == "create":
@@ -49,6 +56,16 @@ def main(argv: list[str] | None = None) -> int:
             result = get_task(args.db, args.task_id)
         elif args.action == "refresh":
             result = refresh_task(args.db, args.task_id)
+        elif args.action == "reconcile-read-unknown":
+            changed = reconcile_read_unknown(
+                args.db, job_id=args.job_id, incident_id=args.incident_id,
+            )
+            result = {"job_id": args.job_id, "changed": changed,
+                      "status": "UNKNOWN" if changed else "UNCHANGED",
+                      "replayed": False}
+            if not changed:
+                print(json.dumps(result, sort_keys=True))
+                return 2
         else:
             job_id = release_step(args.db, task_id=args.task_id, ordinal=args.ordinal,
                                   permit_file=args.permit_file)

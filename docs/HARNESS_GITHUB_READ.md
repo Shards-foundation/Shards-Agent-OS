@@ -38,7 +38,24 @@ The agent CLI can use this bridge through its optional persistent-state mode.
 
 Task creation records intent but does not execute GitHub calls. Release atomically queues one observation. Claim atomically marks it RUNNING before invoking the trusted read-only monitor. After validating the monitor's report and replay-verifiable kernel evidence bundle, both observation and task become SUCCEEDED.
 
-A process crash leaves RUNNING. Invalid evidence or inspector failure becomes UNKNOWN. Neither is automatically reissued. Reconcile with independent evidence and create a new observation when needed.
+A process crash leaves RUNNING. Invalid evidence or inspector failure becomes UNKNOWN.
+Neither is automatically reissued. A stuck RUNNING job keeps local execution
+capacity occupied until an operator explicitly reconciles it.
+
+**After independently confirming that the worker process has stopped** and
+recording the incident in your incident log, use:
+
+    python -m shards_agent_os.harness_cli \
+      --db "$DB" reconcile-read-unknown JOB_ID \
+      --incident-id incident-20261104-001
+
+This atomically marks the observation and its parent task UNKNOWN and persists
+the incident reference. It **never** retries that operation or turns UNKNOWN
+into SUCCEEDED. A new independent inspection may be created after the operator
+has assessed the external outcome and risk. Do not run reconciliation while
+the original worker might still be executing. The database cannot prove that
+external effects have stopped. This command is an operator maintenance
+control, not autonomous crash healing.
 
 A SUCCEEDED snapshot now retains its verified kernel evidence bundle in the
 private SQLite database **in the same transaction** as the terminal success
