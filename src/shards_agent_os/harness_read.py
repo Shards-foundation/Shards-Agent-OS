@@ -98,7 +98,10 @@ def _check_report(repository: str, report: dict, evidence: dict) -> str:
     encoded = json.dumps(report, sort_keys=True, separators=(",", ":"), allow_nan=False)
     if len(encoded.encode("utf-8")) > 65536:
         raise ValueError("Inspection report too large")
-    return encoded
+    bundle_json = json.dumps(evidence, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    if len(bundle_json.encode("utf-8")) > 524288:
+        raise ValueError("Inspection evidence too large")
+    return encoded, bundle_json
 
 
 def run_read_job(
@@ -149,13 +152,22 @@ def run_read_job(
     report, evidence = None, None
     try:
         candidate_report, candidate_evidence = inspector(repository)
-        encoded = _check_report(repository, candidate_report, candidate_evidence)
+        encoded, encoded_evidence = _check_report(
+            repository, candidate_report, candidate_evidence
+        )
         report, evidence = candidate_report, candidate_evidence
         status = "SUCCEEDED"
     except Exception:
-        encoded, status = None, "UNKNOWN"
+        encoded, encoded_evidence, status = None, None, "UNKNOWN"
     with _connect(db_path) as conn:
         conn.execute("BEGIN IMMEDIATE")
+        if status == "SUCCEEDED":
+            # Evidence and the terminal success state must commit atomically.
+            # A crash cannot leave a successful observation without its proof.
+            conn.execute(
+                "INSERT INTO harness_read_evidence (job_id,evidence_json) VALUES (?,?)",
+                (job_id, encoded_evidence),
+            )
         changed = conn.execute(
             "UPDATE harness_read_jobs SET status=?,report_json=?,root_hash=?,finished_at_ms=? "
             "WHERE job_id=? AND status='RUNNING'",
@@ -184,3 +196,34 @@ def get_read_job(db_path: str, job_id: str) -> dict:
         result = dict(row)
         result["report"] = json.loads(result.pop("report_json")) if row["report_json"] else None
         return result
+
+
+def get_read_evidence(db_path: str, job_id: str) -> dict:
+    """Replay-verify a persisted success result without executing a tool.
+
+    Suitable for rebuilding output files after a process dies after the SQLite
+    commit. The evidence is stored in the same private 0600 database. An
+    external immutable anchor is still needed for independent attestation.
+    """
+    if type(job_id) is not str or not _JOB_ID.fullmatch(job_id):
+        raise ValueError("Invalid observation job ID")
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT r.repository,r.status,r.report_json,r.root_hash,e.evidence_json "
+            "FROM harness_read_jobs AS r "
+            "LEFT JOIN harness_read_evidence AS e ON e.job_id=r.job_id "
+            "WHERE r.job_id=?", (job_id,),
+        ).fetchone()
+        if row is None or row["status"] != "SUCCEEDED":
+            raise ValueError("Observation is not successful")
+        if row["report_json"] is None or row["evidence_json"] is None:
+            raise ValueError("Successful observation is missing evidence")
+        try:
+            report = json.loads(row["report_json"])
+            evidence = json.loads(row["evidence_json"])
+            _check_report(row["repository"], report, evidence)
+        except (ValueError, TypeError, KeyError) as exc:
+            raise ValueError("Persisted evidence failed verification") from exc
+        if row["root_hash"] != report["evidence_root_hash"]:
+            raise ValueError("Persisted evidence root mismatch")
+        return {"report": report, "evidence": evidence}

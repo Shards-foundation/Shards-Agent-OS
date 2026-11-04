@@ -40,7 +40,22 @@ Task creation records intent but does not execute GitHub calls. Release atomical
 
 A process crash leaves RUNNING. Invalid evidence or inspector failure becomes UNKNOWN. Neither is automatically reissued. Reconcile with independent evidence and create a new observation when needed.
 
-A SUCCEEDED snapshot remains queryable but does not recreate deleted evidence artifacts. The monitor must preserve evidence.json externally.
+A SUCCEEDED snapshot now retains its verified kernel evidence bundle in the
+private SQLite database **in the same transaction** as the terminal success
+status. To reconstruct lost output files without another GitHub request:
+
+    from shards_agent_os.harness_read import get_read_evidence
+    verified = get_read_evidence(db, job_id)
+    report, evidence = verified["report"], verified["evidence"]
+
+The GitHub Maintenance Agent exposes `--recover-task-id` for this same
+offline export after the matching integration is installed. Persisted evidence
+is bounded to 512 KiB per observation, replay-verified on read, and stored in
+the protected local DB. It is **not** independently anchored proof; operators
+should export and retain a separate evidence artifact if stronger attestations
+or independent review are required. Earlier SUCCEEDED records created before
+this schema enhancement have no persisted bundle and must fail recovery rather
+than fabricate proof.
 
 ## Limitations
 
