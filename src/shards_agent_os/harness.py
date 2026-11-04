@@ -130,7 +130,7 @@ def _refresh_locked(conn, task_id: str) -> str:
     if parent is None:
         raise ValueError("Unknown task")
     stages = conn.execute(
-        "SELECT ordinal,status,job_id FROM harness_steps WHERE task_id=? ORDER BY ordinal", (task_id,)
+        "SELECT ordinal,status,job_id,tool FROM harness_steps WHERE task_id=? ORDER BY ordinal", (task_id,)
     ).fetchall()
     states = []
     for stage in stages:
