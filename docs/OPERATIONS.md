@@ -16,6 +16,7 @@ Linux/POSIX environment with Python >=3.11, persistent local disk, private `0700
 - `shards-agent-os --db "$DB" halt --reason 'maintenance'` prevents *new* jobs from being claimed. This is **not a hard interrupt** of already running work.
 - Stop the worker with SIGTERM. A separate kernel operator may continue processing an in-flight request; check its audit/evidence before considering any retry.
 - Inspect `status` and `list`. Any stale `RUNNING` or `UNKNOWN` result requires manual investigation; never duplicate the same permit or action to guess an outcome.
+- If a worker crash leaves a stale `RUNNING` claim, investigate kernel evidence and whether the operator action has completed or is still active. Once reconciled externally, run `shards-agent-os --db "$DB" reconcile-unknown <job-id> --incident-id INC-123`. It marks the job `UNKNOWN`, does not requeue it and frees the local capacity. It **does not** itself authenticate the evidence.
 - `resume` clears the local dispatch latch only; it is not a cryptographic authorization and cannot reset a HALTED Shards-Kernel instance.
 
 ## Backups and disaster recovery

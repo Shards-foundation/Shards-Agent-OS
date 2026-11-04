@@ -78,7 +78,7 @@ See [architecture](docs/ARCHITECTURE.md), [operator runbook](docs/OPERATIONS.md)
 
 - Device drivers, operating-system memory management, hardware interrupts, multi-host orchestration, arbitrary shell/network/wallet tools, semantic vector retrieval, privileged physical devices and agent LLMs are **not shipped**.
 - The database is local SQLite mode `0600` with WAL and synchronous full commits; the host, state directory, credentials and SQLite files must still be protected by OS-level controls. There is no encrypted memory store or independently anchored event ledger.
-- `halt` stops new scheduling claims but does **not** revoke a Shards-Kernel permit or abort external side effects. `resume` never revives a halted kernel instance.
+- `halt` stops new scheduling claims but does **not** revoke a Shards-Kernel permit or abort external side effects. `resume` never revives a halted kernel instance. For a crash-stuck RUNNING task, the trusted operator can use `reconcile-unknown <job-id> --incident-id <reference>` after investigating the kernel audit and any live effects; this transitions only RUNNING to UNKNOWN and **never retries** it.
 - If the worker crashes after claiming a job, it remains `RUNNING` and consumes capacity. Manual reconciliation with **independently trusted kernel evidence** is required. No automatic retries occur.
 - Intended for a local trusted operator. There is no public API or Internet-accessible service in this project.
 

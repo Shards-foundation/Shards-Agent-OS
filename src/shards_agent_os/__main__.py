@@ -11,7 +11,7 @@ from .daemon import serve
 from .directory import enroll_agent, inventory, register_capability
 from .interrupts import control_state, halt, resume
 from .memory import delete, purge_expired, recall, store
-from .scheduler import cancel_pending, enqueue, list_jobs, run_once
+from .scheduler import cancel_pending, enqueue, list_jobs, run_once, reconcile_unknown
 from .storage import open_db
 
 
@@ -60,6 +60,9 @@ def main(argv: list[str] | None = None) -> int:
     emergency = commands.add_parser('halt', help='Block new claims, not already running work')
     emergency.add_argument('--reason', required=True)
     commands.add_parser('resume', help='Resume local dispatch after operator review')
+    reconcile = commands.add_parser('reconcile-unknown', help='Explicitly classify stuck RUNNING as UNKNOWN')
+    reconcile.add_argument('job_id')
+    reconcile.add_argument('--incident-id', required=True)
     write = commands.add_parser('memory-put', help='Operator-only typed memory upsert')
     _add_mem_fields(write)
     write.add_argument('--value-json', required=True)
@@ -112,6 +115,10 @@ def main(argv: list[str] | None = None) -> int:
             result = {'halted':True,'changed':halt(args.db,args.reason), 'warning':'In-flight kernel work is not preempted'}
         elif args.command == 'resume':
             result = {'halted':False,'changed':resume(args.db)}
+        elif args.command == 'reconcile-unknown':
+            result = {'job_id':args.job_id,
+                      'reconciled':reconcile_unknown(args.db,args.job_id,args.incident_id),
+                      'status':'UNKNOWN'}
         elif args.command == 'memory-put':
             result = store(args.db,namespace=args.namespace,kind=args.kind,key=args.key,
                            value=_strict_json(args.value_json),provenance=args.provenance,

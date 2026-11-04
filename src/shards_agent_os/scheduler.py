@@ -97,7 +97,7 @@ def _invoke_kernel(job: Job, timeout_s: float) -> tuple[int, str]:
     # Do not inherit operator/issuer secrets or unrelated service credentials.
     # Only the agent bearer and minimal interpreter environment cross into MCP.
     env = {key: os.environ[key] for key in (
-        "SHARDS_KERNEL_AGENT_TOKEN", "PATH", "HOME", "PYTHONPATH",
+        "SHARDS_KERNEL_AGENT_TOKEN", "PATH", "HOME",
         "VIRTUAL_ENV", "LANG", "LC_ALL", "SYSTEMROOT",
     ) if key in os.environ}
     completed = subprocess.run(
@@ -107,11 +107,25 @@ def _invoke_kernel(job: Job, timeout_s: float) -> tuple[int, str]:
     return completed.returncode, completed.stdout
 
 
+def _unique_json_pairs(pairs: list[tuple[str, object]]) -> dict:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError('Duplicate receipt key')
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(_value: str) -> None:
+    raise ValueError('Non-finite JSON constant')
+
+
 def _result_state(job: Job, returncode: int, stdout: str) -> tuple[str, dict]:
     if len(stdout.encode("utf-8")) > 65536:
         return "UNKNOWN", {"error": "Oversized or unverified kernel receipt"}
     try:
-        receipt = json.loads(stdout)
+        receipt = json.loads(stdout, object_pairs_hook=_unique_json_pairs,
+                             parse_constant=_reject_json_constant)
         if type(receipt) is not dict:
             raise ValueError("Invalid receipt")
     except (ValueError, TypeError):
@@ -123,10 +137,13 @@ def _result_state(job: Job, returncode: int, stdout: str) -> tuple[str, dict]:
         result = receipt.get("result")
         if not isinstance(request_id, str) or re.fullmatch(r"mcp-relay-[0-9a-f]{32}", request_id) is None:
             return "UNKNOWN", {"error": "Uncorrelated ALLOW receipt"}
-        if job.tool == "echo" and type(result) is not str:
-            return "UNKNOWN", {"error": "Invalid echo result"}
-        if job.tool == "add" and (type(result) not in (int, float) or not math.isfinite(result)):
-            return "UNKNOWN", {"error": "Invalid add result"}
+        if job.tool == "echo":
+            if type(result) is not str or result != job.arguments['text']:
+                return "UNKNOWN", {"error": "Invalid or mismatched echo result"}
+        if job.tool == "add":
+            if (type(result) not in (int, float) or not math.isfinite(result)
+                    or result != job.arguments['a'] + job.arguments['b']):
+                return "UNKNOWN", {"error": "Invalid or mismatched add result"}
         return "SUCCEEDED", {"decision": "ALLOW", "request_id": request_id, "result": result}
     return "UNKNOWN", {"error": "Unverified execution outcome"}
 
@@ -188,3 +205,22 @@ def run_once(
         return {"job_id": job.job_id, "status": status, "receipt": result}
     finally:
         conn.close()
+
+
+def reconcile_unknown(db_path: str | os.PathLike[str], job_id: str, incident_id: str) -> bool:
+    """Classify a stuck RUNNING job as UNKNOWN, never retryable.
+
+    This does not verify kernel evidence or prove that work has stopped.
+    A trusted operator must verify both out of band before recovering capacity.
+    """
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{2,79}', incident_id):
+        raise ValueError('Provide a 3..80 character incident reference')
+    if not re.fullmatch(r'[0-9a-f]{32}', job_id):
+        raise ValueError('Invalid job ID')
+    result = json.dumps({'error':'Operator moved RUNNING to UNKNOWN', 'incident_id':incident_id})
+    with _connect(db_path) as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        return conn.execute(
+            "UPDATE jobs SET status='UNKNOWN',result_json=?,finished_at_ms=? WHERE job_id=? AND status='RUNNING'",
+            (result,int(time.time()*1000),job_id)
+        ).rowcount == 1

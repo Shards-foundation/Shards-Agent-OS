@@ -146,3 +146,41 @@ class RuntimeServicesTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+# Additional adversarial receipt and stuck-job regression gates.
+class ReceiptAndRecoveryTests(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.db=Path(self.temp.name)/'jobs.sqlite'
+
+    def test_rejects_duplicate_or_mismatched_approved_receipts(self):
+        from shards_agent_os.scheduler import _result_state, Job
+        job=Job(job_id='a'*32,run_at_ms=0,port=1,tool='echo',arguments={'text':'expected'},
+                permit_file='/p',status='RUNNING')
+        samples=[
+            '{"decision":"DENY","decision":"ALLOW","request_id":"'+REQUEST_ID+'","result":"expected"}',
+            json.dumps({'decision':'ALLOW','request_id':REQUEST_ID,'result':'unexpected'}),
+            '{"decision":"ALLOW","request_id":"'+REQUEST_ID+'","result":NaN}',
+        ]
+        for raw in samples:
+            with self.subTest(raw=raw):
+                self.assertEqual(_result_state(job,0,raw)[0],'UNKNOWN')
+        add=Job(job_id='b'*32,run_at_ms=0,port=1,tool='add',arguments={'a':2,'b':3},
+                permit_file='/p',status='RUNNING')
+        self.assertEqual(_result_state(add,0,json.dumps({'decision':'ALLOW','request_id':REQUEST_ID,'result':99}))[0],'UNKNOWN')
+
+    def test_operator_can_reconcile_stale_running_only_to_unknown(self):
+        from shards_agent_os.scheduler import reconcile_unknown
+        job=enqueue(self.db,run_at_ms=0,port=8765,tool='echo',arguments={'text':'example'},
+                    permit_file='/private/permit.json')
+        with self.assertRaises(ValueError):
+            reconcile_unknown(self.db,job,'')
+        self.assertFalse(reconcile_unknown(self.db,job,'INC-123'))
+        from shards_agent_os.storage import open_db
+        with open_db(self.db) as conn:
+            conn.execute("UPDATE jobs SET status='RUNNING' WHERE job_id=?",(job,))
+        self.assertTrue(reconcile_unknown(self.db,job,'INC-123'))
+        self.assertFalse(reconcile_unknown(self.db,job,'INC-123'))
+        self.assertEqual(list_jobs(self.db)[0]['status'],'UNKNOWN')
+        self.assertIsNone(run_once(self.db))
