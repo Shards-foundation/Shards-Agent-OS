@@ -12,7 +12,7 @@
 
 ## Install
 
-Python 3.11+ on a trusted POSIX host:
+Python 3.11+ on a trusted POSIX host. **Dependency note (4 November 2026):** the public PyPI index currently exposes only `shards-kernel==0.1.0`, while the required CLI implementation is on Shards-Kernel main at commit `4d521d6aa3c523bdea905de50f50be4133321020`. This project's `kernel` extra temporarily pins that immutable Git commit and must be switched to an independently verified PyPI 0.1.2 release once publishing is repaired.
 
 ```bash
 python -m pip install -e '.[kernel]'
