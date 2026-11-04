@@ -26,3 +26,22 @@ Back up SQLite with SQLite's online backup API rather than copying a live WAL fi
 ## Scope
 
 No deployment host, KMS/HSM, secret store, reverse proxy, public endpoint, cron installer or unattended permit issuer is provisioned by this repository. Sensitive production execution requires a separate deployment exercise with independent verification.
+
+## Recurring operations
+
+Shards Agent OS interval templates are *inert* until an independent operator
+releases one occurrence with a new signed permit (`schedule-release`). The
+process supervisor does not and must not mint permits or read signing keys.
+Use `schedule-due` to inspect due intent, and `schedule-skip` to advance past
+expired windows after downtime without creating executable jobs. Do not
+automatically substitute `schedule-release` into cron with a reusable permit
+path; that defeats the designed separation of duties. `schedule-release`
+atomically enqueues at most one current window and fast-forwards older periods.
+
+The `schedule_clock` SQLite record tracks local time's high-water mark,
+rejecting regressions during schedule release/skip. It is **not trusted time**
+and cannot detect wholesale database rollback or compromised host clocks.
+
+The immediate SQLite state directory must be 0700 and owned by the current
+operator account. Back up using SQLite's online backup mechanism, including
+the new recurring schedule state and clock checkpoint.

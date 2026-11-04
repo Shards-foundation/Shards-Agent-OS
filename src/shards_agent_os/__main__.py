@@ -11,6 +11,8 @@ from .daemon import serve
 from .directory import enroll_agent, inventory, register_capability
 from .interrupts import control_state, halt, resume
 from .memory import delete, purge_expired, recall, store
+from .recurrence import (create_schedule, list_schedules, due_schedules,
+                         release_occurrence, set_schedule_enabled, skip_missed)
 from .scheduler import cancel_pending, enqueue, list_jobs, run_once, reconcile_unknown
 from .storage import open_db
 
@@ -85,6 +87,24 @@ def main(argv: list[str] | None = None) -> int:
     cap.add_argument('--description', default='')
     cap.add_argument('--tools', default='', help='Comma-separated echo/add subset')
     commands.add_parser('inventory', help='Read local inventories')
+    schedule = commands.add_parser('schedule-add', help='Register an inert interval template, no permit')
+    schedule.add_argument('--name', required=True)
+    schedule.add_argument('--every-ms', type=int, required=True)
+    schedule.add_argument('--start-at-ms', type=int)
+    schedule.add_argument('--window-ms', type=int, default=60_000)
+    schedule.add_argument('--port', type=int, required=True)
+    schedule.add_argument('--tool', choices=('echo', 'add'), required=True)
+    schedule.add_argument('--arguments-json', required=True)
+    commands.add_parser('schedule-list', help='List inert schedule templates')
+    commands.add_parser('schedule-due', help='List due templates; never issues permits')
+    issue = commands.add_parser('schedule-release', help='Manually bind fresh permit to one occurrence')
+    issue.add_argument('schedule_id')
+    issue.add_argument('--permit-file', required=True)
+    skip = commands.add_parser('schedule-skip', help='Skip expired windows without any permit')
+    skip.add_argument('schedule_id')
+    for command in ('schedule-enable', 'schedule-disable'):
+        toggle = commands.add_parser(command, help='Toggle an inert template')
+        toggle.add_argument('schedule_id')
     args = p.parse_args(argv)
     try:
         if args.command == 'enqueue':
@@ -134,6 +154,26 @@ def main(argv: list[str] | None = None) -> int:
             enroll_agent(args.db,args.actor,args.description,[t for t in args.tools.split(',') if t]);result={'status':'RECORDED','kernel_authenticated':False}
         elif args.command == 'capability-register':
             register_capability(args.db,args.id,args.kind,args.description,[t for t in args.tools.split(',') if t]);result={'status':'RECORDED','executable':False}
+        elif args.command == 'schedule-add':
+            result = {'schedule_id': create_schedule(
+                args.db, name=args.name, interval_ms=args.every_ms,
+                start_at_ms=args.start_at_ms if args.start_at_ms is not None else int(time.time()*1000),
+                window_ms=args.window_ms, port=args.port, tool=args.tool,
+                arguments=_strict_json(args.arguments_json)), 'status':'SCHEDULED_UNAUTHORISED'}
+        elif args.command == 'schedule-list':
+            result = {'schedules': list_schedules(args.db)}
+        elif args.command == 'schedule-due':
+            result = {'due': due_schedules(args.db)}
+        elif args.command == 'schedule-release':
+            result = release_occurrence(args.db, schedule_id=args.schedule_id,
+                                        permit_file=args.permit_file)
+        elif args.command == 'schedule-skip':
+            result = skip_missed(args.db, args.schedule_id)
+        elif args.command in ('schedule-enable', 'schedule-disable'):
+            enabled = args.command == 'schedule-enable'
+            result = {'schedule_id':args.schedule_id,
+                      'changed': set_schedule_enabled(args.db,args.schedule_id,enabled),
+                      'enabled':enabled}
         else:
             result = inventory(args.db)
     except (ValueError, OSError, OverflowError, TypeError, json.JSONDecodeError):

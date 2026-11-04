@@ -22,6 +22,12 @@ def open_db(db_path: str | Path) -> sqlite3.Connection:
         raise ValueError("Database requires an absolute path and existing parent directory")
     if os.name != "posix" or not hasattr(os, "O_NOFOLLOW"):
         raise OSError("Private SQLite state requires a POSIX host with O_NOFOLLOW")
+    # SQLite creates auxiliary -wal/-shm files in this directory. Protect the
+    # containing directory as rigorously as the database itself.
+    parent = os.stat(path.parent, follow_symlinks=False)
+    if (not stat.S_ISDIR(parent.st_mode) or parent.st_uid != os.geteuid()
+            or parent.st_mode & 0o077):
+        raise PermissionError("Database parent directory must be owned by this user and private (0700)")
     fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0), 0o600)
     try:
         info = os.fstat(fd)
@@ -49,6 +55,20 @@ def open_db(db_path: str | Path) -> sqlite3.Connection:
                 halted INTEGER NOT NULL CHECK (halted IN (0,1)),
                 reason TEXT NOT NULL, updated_at_ms INTEGER NOT NULL)""")
             connection.execute("INSERT OR IGNORE INTO control VALUES (1,0,'',0)")
+            connection.execute("""CREATE TABLE IF NOT EXISTS recurring_schedules (
+                schedule_id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE,
+                interval_ms INTEGER NOT NULL CHECK(interval_ms >= 60000),
+                next_due_ms INTEGER NOT NULL CHECK(next_due_ms >= 0),
+                window_ms INTEGER NOT NULL CHECK(window_ms >= 1000),
+                port INTEGER NOT NULL, tool TEXT NOT NULL,
+                arguments_json TEXT NOT NULL,
+                enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+                last_issued_at_ms INTEGER, last_job_id TEXT,
+                skipped_intervals INTEGER NOT NULL DEFAULT 0)""")
+            connection.execute("""CREATE TABLE IF NOT EXISTS schedule_clock (
+                singleton INTEGER PRIMARY KEY CHECK (singleton=1),
+                high_water_ms INTEGER NOT NULL)""")
+            connection.execute("INSERT OR IGNORE INTO schedule_clock VALUES (1,0)")
             connection.execute("""CREATE TABLE IF NOT EXISTS memory (
                 namespace TEXT NOT NULL, kind TEXT NOT NULL, key TEXT NOT NULL,
                 value_json TEXT NOT NULL, provenance TEXT NOT NULL,
