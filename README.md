@@ -138,6 +138,24 @@ A local test proves that the resulting token is accepted once by StrictKernel
 and denied after argument tampering or replay. This is not an online approval
 service or a delegation of signing authority to an agent.
 
+## Durable signed sandbox jobs
+
+Agent OS now has a durable, executable sandbox job queue, not just a
+standalone broker. As an unprivileged Linux user, enqueue a job with a
+specific pre-approved OCI digest, complete resource budgets and a separately
+issued one-use Shards-Kernel permit. Agent OS persists the claim in SQLite,
+dispatches it through the authenticated local Unix broker, verifies the
+returned workload fingerprint/cleanup, records bounded output and refuses
+automatic replay after crashes or ambiguous results. Use the dedicated
+sandbox-enqueue, sandbox-run-once, sandbox-serve and sandbox-list CLI
+subcommands. The existing halt latch and shared outstanding-job quota
+apply to both the legacy MCP and sandbox queues.
+
+See [Durable sandbox jobs](docs/SANDBOX_JOBS.md) for a real
+offline computation example, full CLI flow, incident handling and the
+ephemeral installed-host acceptance test. The agent still has no Docker
+socket, signing keys or permission to broaden a signed workload.
+
 ## Architecture and operational limits
 
 See [architecture](docs/ARCHITECTURE.md), [operator runbook](docs/OPERATIONS.md) and [security boundaries](docs/SECURITY.md).
