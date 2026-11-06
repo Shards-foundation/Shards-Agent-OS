@@ -103,7 +103,39 @@ to substitute it would defeat authorisation.
 
 The operator creates its audit database at mode 0600, holds a nonblocking
 single-writer file lock for the service lifetime, and replays persisted audit
-entries and consumed permits when booting. A persistent wall-clock checkpoint
+entries and consumed permits when booting.
+
+### Crash/orphan recovery
+
+Each workload launched by the persistent operator carries two container
+labels: `shards.agent-os.sandbox=1` and the operator identity
+`shards.agent-os.owner=<kernel-id>`. The operator acquires its existing
+single-writer SQLite lock **before** inspecting or removing containers.
+At startup, it lists only its own labelled sandboxes, independently verifies
+the labels on each container, writes a **STARTED** recovery event to the
+operator's private SQLite database, forcibly removes the container, and
+verifies absence. If the process dies during cleanup, the next startup
+reconciles unfinished STARTED journal entries before accepting new MCP calls.
+
+This process **never resumes or retries** interrupted work. Its associated
+signed permit is already consumed in the kernel's persistent ledger, and
+an ambiguous external effect must be investigated independently. Any
+unexpected container name, foreign ownership, unavailable Docker daemon,
+audit write error or unconfirmed removal prevents operator startup.
+
+**Single-owner constraint:** this recovery policy assumes exactly one
+running operator instance per `kernel-id` on the chosen Docker daemon.
+Do not share the same owner label between unrelated operators, database
+paths or independent Docker control planes. A second instance under a
+different database could otherwise terminate legitimate active work.
+The host operator must enforce this operational invariant.
+
+The Linux acceptance job deliberately creates two real gVisor containers:
+one abandoned under the selected owner and one owned by another operator.
+It proves that only the selected owner is removed, that the other
+container is unaffected, and that the recovery journal persists the
+verified outcome. The CI teardown removes the foreign test container.
+ A persistent wall-clock checkpoint
 detects local UTC rollback across restarts. The signed v2 permit must bind the
 exact actor, kernel, action `sandbox.exec`, full workload arguments and
 expiry; operator startup never issues a permit.
