@@ -2,11 +2,12 @@
 
 Run on an independently trusted approval workstation, NEVER from an agent or
 the Docker-authorised sandbox host. This CLI is intentionally not an MCP tool.
-The private key is never printed, sent to the sandbox, or placed in the permit.
+The encrypted private key is never printed, sent to the sandbox, or placed in the permit.
 """
 from __future__ import annotations
 
 import argparse
+import getpass
 import hashlib
 import json
 import os
@@ -34,6 +35,28 @@ _FIELDS = frozenset({
 _IDENT = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}\Z")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _MAX_KEY_BYTES = 4096
+_MIN_PASSPHRASE_BYTES = 16
+
+
+def _key_passphrase(*, confirm: bool) -> bytes:
+    """Read only from a live approver terminal, never argv/env/agent transport."""
+    if not sys.stdin.isatty() or not sys.stderr.isatty():
+        raise PermissionError("Offline signing requires an interactive terminal")
+    value = getpass.getpass("Offline signing-key passphrase: ").encode("utf-8")
+    if not _MIN_PASSPHRASE_BYTES <= len(value) <= 1024:
+        raise ValueError("Offline signer requires a strong passphrase")
+    if confirm:
+        repeated = getpass.getpass("Confirm signing-key passphrase: ").encode("utf-8")
+        if value != repeated:
+            raise ValueError("Passphrase confirmation failed")
+    return value
+
+
+def _valid_passphrase(value: bytes) -> bytes:
+    if type(value) is not bytes or not _MIN_PASSPHRASE_BYTES <= len(value) <= 1024:
+        raise ValueError("Offline signer requires a strong passphrase")
+    return value
+
 
 
 def _secure_parent(path: Path) -> None:
@@ -60,7 +83,7 @@ def _new_file(path: str, data: bytes, *, mode: int) -> None:
         os.close(fd)
 
 
-def _load_key(path: str) -> Ed25519PrivateKey:
+def _load_key(path: str, *, passphrase: bytes) -> Ed25519PrivateKey:
     source = Path(path)
     _secure_parent(source)
     fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
@@ -76,7 +99,9 @@ def _load_key(path: str) -> Ed25519PrivateKey:
         os.close(fd)
     if len(data) > _MAX_KEY_BYTES:
         raise ValueError("Private signing key exceeds length limit")
-    key = serialization.load_pem_private_key(data, password=None)
+    if not data.startswith(b"-----BEGIN ENCRYPTED PRIVATE KEY-----"):
+        raise PermissionError("Unencrypted legacy signing keys are refused")
+    key = serialization.load_pem_private_key(data, password=_valid_passphrase(passphrase))
     if not isinstance(key, Ed25519PrivateKey):
         raise ValueError("Expected an Ed25519 signing private key")
     return key
@@ -115,7 +140,7 @@ def _identifier(value: str, name: str) -> str:
 def issue_permit(
     *, private_key_path: str, request_path: str, output_path: str,
     approval_digest: str, issuer: str, key_id: str, kernel_id: str,
-    actor: str, ttl_seconds: int, now_ms: int | None = None,
+    actor: str, ttl_seconds: int, passphrase: bytes, now_ms: int | None = None,
 ) -> dict[str, Any]:
     """Issue one signed permit only for an externally approved exact digest."""
     issuer = _identifier(issuer, "issuer")
@@ -129,7 +154,7 @@ def issue_permit(
     payload, computed = _request(request_path)
     if computed != approval_digest:
         raise PermissionError("Approved digest differs from exact execution request")
-    key = _load_key(private_key_path)
+    key = _load_key(private_key_path, passphrase=passphrase)
     issued = int(time.time() * 1000) if now_ms is None else now_ms
     if type(issued) is not int or issued <= 30000:
         raise ValueError("Invalid issuer UTC timestamp")
@@ -162,7 +187,7 @@ def issue_permit(
     }
 
 
-def generate_key(*, private_path: str, public_path: str) -> dict[str, Any]:
+def generate_key(*, private_path: str, public_path: str, passphrase: bytes) -> dict[str, Any]:
     if Path(private_path) == Path(public_path):
         raise ValueError("Private and public key paths must differ")
     _secure_parent(Path(private_path))
@@ -173,7 +198,7 @@ def generate_key(*, private_path: str, public_path: str) -> dict[str, Any]:
     pem = key.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption(),
+        encryption_algorithm=serialization.BestAvailableEncryption(_valid_passphrase(passphrase)),
     )
     public = key.public_key().public_bytes_raw().hex()
     _new_file(private_path, pem, mode=0o600)
@@ -209,6 +234,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.action == "keygen":
             result = generate_key(
                 private_path=args.private_key_file, public_path=args.public_key_file,
+                passphrase=_key_passphrase(confirm=True),
             )
         elif args.action == "digest":
             request, sha = _request(args.arguments_file)
@@ -220,6 +246,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 approval_digest=args.approve_sha256,
                 issuer=args.issuer, key_id=args.key_id, kernel_id=args.kernel_id,
                 actor=args.actor, ttl_seconds=args.ttl_seconds,
+                passphrase=_key_passphrase(confirm=False),
             )
         print(json.dumps(result, sort_keys=True, separators=(",", ":"), allow_nan=False))
         return 0
