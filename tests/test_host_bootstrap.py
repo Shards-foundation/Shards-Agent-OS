@@ -50,7 +50,7 @@ class HostBootstrapTests(unittest.TestCase):
             patch.object(boot, "_ensure_host_accounts") as account,
             patch.object(boot, "_install_unit") as install,
         ):
-            with self.assertRaises(PermissionError):
+            with self.assertRaisesRegex(boot.BootstrapFailure, "prerequisites:PermissionError"):
                 boot.bootstrap("shards-agent", start=True)
             account.assert_not_called()
             install.assert_not_called()
