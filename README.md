@@ -75,7 +75,7 @@ shards-agent-os --db "$DB" inventory
 
 ## Experimental Linux sandbox executor
 
-A first gVisor-backed workload executor is available to **trusted local operators** through the Python module `shards_agent_os.sandbox_executor`. It launches explicitly configured, digest-pinned OCI workloads with network, filesystem, process and resource restrictions. See [sandbox executor and real Linux tests](docs/SANDBOX_EXECUTOR.md). **This is not yet an authorised agent tool:** signed Shards-Kernel permit binding and the authenticated operator integration remain separate work.
+A first gVisor-backed workload executor is available to **trusted local operators** through the Python module `shards_agent_os.sandbox_executor`. It launches explicitly configured, digest-pinned OCI workloads with network, filesystem, process and resource restrictions. See [sandbox executor and real Linux tests](docs/SANDBOX_EXECUTOR.md). The optional **local MCP governance adapter** can register `sandbox.exec` in a separately configured StrictKernel with public-only Ed25519 permit verifiers. A correctly signed one-use permit is required for an execution request. This is **not** a remotely authenticated or production-hardened sandbox service: host-process identity separation, durable audit/recovery, and a deployed operator remain necessary.
 
 ## Architecture and operational limits
 
