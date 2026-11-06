@@ -43,6 +43,21 @@ jobs:
           export SHARDS_SANDBOX_IMAGE="$(docker image inspect --format '{{index .RepoDigests 0}}' busybox:1.36)"
           test -n "$SHARDS_SANDBOX_IMAGE"
           python -m unittest discover -s tests -p test_sandbox_executor.py -v
+          set -o pipefail
+          python -m unittest discover -s tests -p test_sandbox_governance.py -v 2>&1 | tee "$RUNNER_TEMP/signed-sandbox-test.log"
+          if grep -q "skipped" "$RUNNER_TEMP/signed-sandbox-test.log"; then
+            echo "A required signed gVisor test was skipped"
+            exit 1
+          fi
+          grep -Eq 'test_real_signed_permit_launches_one_gvisor_workload .* \.\.\. ok
+        if: always()
+        run: |
+          names="$(docker ps -a --filter label=shards.agent-os.sandbox=1 --format '{{.Names}}' || true)"
+          if [ -n "$names" ]; then
+            printf 'Unexpected surviving sandboxes:\n%s\n' "$names"
+            exit 1
+          fi
+ "$RUNNER_TEMP/signed-sandbox-test.log"
       - name: Inspect leftover labelled sandboxes
         if: always()
         run: |
