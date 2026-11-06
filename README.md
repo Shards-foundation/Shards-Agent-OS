@@ -104,6 +104,15 @@ protocol and gVisor runtime. The host example still uses a root-equivalent
 trusted Docker service account and **has not been deployed**; this is not
 internet-facing or generally multi-tenant production infrastructure.
 
+### Independent offline permit issuer
+
+The `shards-agent-os-approve` CLI can inspect an exact workload SHA-256
+and issue one-use Ed25519 permits from a **separate offline approver
+workstation**. Its signing key is stored in an encrypted, owner-only PKCS#8
+PEM and requires an interactive passphrase for every issue. Legacy plaintext
+signing keys are rejected. The Docker host receives only the public key.
+See [the offline issuance runbook](docs/SANDBOX_HOST_DEPLOYMENT.md#2b-offline-permit-approval-first-usable-workflow).
+
 ### Reproducible single-host pilot setup
 
 Two additional CLI tools streamline installation without bypassing trust
