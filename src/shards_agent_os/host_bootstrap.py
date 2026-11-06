@@ -32,6 +32,10 @@ _CONFIG = Path("/etc/shards-agent-os/broker.env")
 _SOURCE_UNIT = "resources/shards-agent-os-broker.service"
 
 
+class BootstrapFailure(RuntimeError):
+    """Fixed-phase operator diagnostic; never contains raw environment data."""
+
+
 def _existing_user(name: str):
     try:
         return pwd.getpwnam(name)
@@ -164,26 +168,39 @@ def _install_unit() -> None:
 
 
 def bootstrap(agent_user: str, *, start: bool) -> None:
-    _preconditions(agent_user)
-    _ensure_host_accounts(agent_user)
-    _install_unit()
+    try:
+        _preconditions(agent_user)
+    except Exception as exc:
+        raise BootstrapFailure("prerequisites:" + type(exc).__name__) from exc
+    try:
+        _ensure_host_accounts(agent_user)
+    except Exception as exc:
+        raise BootstrapFailure("host-accounts:" + type(exc).__name__) from exc
+    try:
+        _install_unit()
+    except Exception as exc:
+        raise BootstrapFailure("install-unit:" + type(exc).__name__) from exc
     before = host_doctor.inspect_host(agent=agent_user)
-    if not all(check.ok for check in before):
-        raise RuntimeError("Host doctor refused startup after provisioning")
-    _run("systemctl", "daemon-reload")
+    failed = [check.name for check in before if not check.ok]
+    if failed:
+        raise BootstrapFailure("prestart-checks:" + ",".join(failed))
+    try:
+        _run("systemctl", "daemon-reload")
+    except Exception as exc:
+        raise BootstrapFailure("systemd-reload:" + type(exc).__name__) from exc
     if start:
-        _run("systemctl", "enable", "--now", "shards-agent-os-broker.service")
-        # Type=simple can report started before the broker binds the Unix socket.
-        # Never claim readiness until the complete trusted-host doctor is green.
-        failed: list[str] = []
+        try:
+            _run("systemctl", "enable", "--now", "shards-agent-os-broker.service")
+        except Exception as exc:
+            raise BootstrapFailure("systemd-start:" + type(exc).__name__) from exc
+        # Type=simple can report started before the socket is available.
         for _attempt in range(50):
             after = host_doctor.inspect_host(agent=agent_user, running=True)
             failed = [check.name for check in after if not check.ok]
             if not failed:
                 return
             time.sleep(0.2)
-        raise RuntimeError("Broker readiness preflight failed: " + ",".join(failed))
-
+        raise BootstrapFailure("readiness-checks:" + ",".join(failed))
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="shards-agent-os-bootstrap")
@@ -212,10 +229,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         # All known operator-facing ValueError/PermissionError/RuntimeError
         # messages in these local preconditions are static or check identifiers.
         # Never print subprocess stderr, signed permits or raw exception reprs.
-        if type(exc) in (RuntimeError, ValueError, PermissionError):
-            reason = str(exc)
-        else:
-            reason = type(exc).__name__
+        reason = str(exc) if type(exc) is BootstrapFailure else type(exc).__name__
         print("Sandbox host bootstrap refused: " + reason
               + ". No deployment success is claimed.", file=sys.stderr)
         return 2
