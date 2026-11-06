@@ -52,11 +52,26 @@ def _preconditions(agent_user: str) -> None:
         raise RuntimeError("Host must use systemd")
     if sys.prefix != str(_VENV):
         raise RuntimeError("Run from /opt/shards-agent-os/venv/bin/python")
-    trusted_root = _VENV
-    for path in (trusted_root, _VENV / "bin", _VENV / "bin" / "shards-agent-os-broker"):
+    # The service binary and bundled unit are trusted code. A group-writable
+    # installation ancestor would let an agent replace it before startup.
+    trusted_paths = (
+        Path("/opt"), Path("/opt/shards-agent-os"), _VENV,
+        _VENV / "bin", _VENV / "bin" / "shards-agent-os-broker",
+        _VENV / "lib",
+    )
+    for path in trusted_paths:
         info = path.lstat()
-        if info.st_uid != 0 or (stat.S_IMODE(info.st_mode) & 0o022):
-            raise PermissionError("Trusted installed virtualenv cannot be group/world writable")
+        if info.st_uid != 0 or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+            raise PermissionError("Trusted package ancestry is not root-owned")
+        if stat.S_IMODE(info.st_mode) & 0o022:
+            raise PermissionError("Trusted package ancestry cannot be group/world writable")
+    # The verifier file is intentionally public-key-only but changing it would
+    # select a different trust root: its containing directory must be private.
+    config_parent = _CONFIG.parent.lstat()
+    if (not stat.S_ISDIR(config_parent.st_mode)
+        or config_parent.st_uid != 0
+        or stat.S_IMODE(config_parent.st_mode) != 0o700):
+        raise PermissionError("Pinned verifier directory must be root-owned 0700")
     if not (_VENV / "bin" / "shards-agent-os-broker").is_file():
         raise RuntimeError("Install the Agent OS package before bootstrap")
     agent = _existing_user(agent_user)
