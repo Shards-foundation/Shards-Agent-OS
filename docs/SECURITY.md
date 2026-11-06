@@ -8,4 +8,12 @@
 
 **Permissions:** the state SQLite file is created with 0600 and final-component O_NOFOLLOW under POSIX. Place its parent directory under a private 0700 directory with trusted ownership; this reduces path replacement risk. The check does not prove resistance against a malicious host administrator. Kernel operator state must remain on the operator's independent protected path. Do not share credentials across agents.
 
+**Sandbox host recovery:** the dedicated sandbox operator validates container
+ownership labels before removing any crash-surviving workload. A persistent
+recovery journal records STARTED before cleanup; unresolved ownership or
+container absence forces a startup denial. It does not guarantee external
+exactly-once effects, mitigate a compromised Docker daemon, or protect a
+privileged operator from a compromised host. Operators must not share an
+owner identity across unrelated daemon sessions or audit databases.
+
 **Release standard:** passing unit tests is not sufficient for live sensitive operations. Verify signed real-process MCP ALLOW, exact parameter binding and replay DENY, crash/recovery, negative auth, timeouts, audit integrity and host permissions. Production deployment is not claimed.
