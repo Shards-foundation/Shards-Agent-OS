@@ -33,6 +33,8 @@ def create_governed_sandbox_server(
     """
     if not isinstance(kernel, StrictKernel):
         raise TypeError("sandbox.exec requires StrictKernel")
+    if not kernel._public_verifiers or kernel._keyring:
+        raise ValueError("sandbox.exec requires public-only Ed25519 permit verification")
     runner = GVisorExecutor() if executor is None else executor
     if not isinstance(runner, GVisorExecutor):
         raise TypeError("A trusted GVisorExecutor is required")
