@@ -50,6 +50,18 @@ def open_db(db_path: str | Path) -> sqlite3.Connection:
                 status TEXT NOT NULL, result_json TEXT,
                 created_at_ms INTEGER NOT NULL, started_at_ms INTEGER,
                 finished_at_ms INTEGER)""")
+            connection.execute("""CREATE TABLE IF NOT EXISTS sandbox_jobs (
+                job_id TEXT PRIMARY KEY, run_at_ms INTEGER NOT NULL,
+                socket_path TEXT NOT NULL, operator_uid INTEGER NOT NULL,
+                arguments_json TEXT NOT NULL, permit_file TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN
+                    ('PENDING','RUNNING','SUCCEEDED','FAILED','DENIED','UNKNOWN','CANCELLED')),
+                result_json TEXT, created_at_ms INTEGER NOT NULL,
+                started_at_ms INTEGER, finished_at_ms INTEGER)""")
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sandbox_jobs_due "
+                "ON sandbox_jobs(status, run_at_ms, job_id)"
+            )
             connection.execute("""CREATE TABLE IF NOT EXISTS control (
                 singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
                 halted INTEGER NOT NULL CHECK (halted IN (0,1)),
