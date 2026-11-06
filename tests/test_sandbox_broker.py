@@ -175,7 +175,23 @@ class RealPeerCredentialBrokerTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 return json.loads(result.stdout)
 
+            def grant_client_socket_group():
+                # CI launches the operator as the runner's primary group.
+                # A deployed systemd service runs with Group=shards-broker-clients.
+                # Model that dedicated service group explicitly on this socket.
+                permission = subprocess.run(
+                    ["sudo", "-n", "chgrp", group, str(sock_path)],
+                    capture_output=True, text=True, timeout=10, check=False,
+                )
+                self.assertEqual(permission.returncode, 0, permission.stderr)
+                os.chmod(sock_path, 0o660)
+                self.assertEqual(
+                    sock_path.stat().st_gid, grp.getgrnam(group).gr_gid,
+                )
+                self.assertEqual(stat.S_IMODE(sock_path.stat().st_mode), 0o660)
+
             first = start()
+            grant_client_socket_group()
             second = None
             try:
                 # The unprivileged caller must not have the privileged daemon
@@ -206,6 +222,7 @@ class RealPeerCredentialBrokerTests(unittest.TestCase):
                 first.kill()
                 first.wait(timeout=10)
                 second = start()
+                grant_client_socket_group()
                 replay = call_as_agent(request)
                 self.assertEqual(replay["decision"], "DENY", replay)
                 self.assertTrue(audit.exists())
