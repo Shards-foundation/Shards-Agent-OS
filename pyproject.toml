@@ -20,6 +20,7 @@ shards-agent-os-broker = "shards_agent_os.sandbox_broker:main"
 shards-agent-os-sandbox-call = "shards_agent_os.sandbox_client:main"
 shards-agent-os-doctor = "shards_agent_os.host_doctor:main"
 shards-agent-os-bootstrap = "shards_agent_os.host_bootstrap:main"
+shards-agent-os-approve = "shards_agent_os.offline_approver:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
