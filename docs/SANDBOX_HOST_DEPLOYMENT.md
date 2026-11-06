@@ -152,6 +152,87 @@ succeeds. It then restarts the real service and asserts permit replay denial.
 This is independent evidence of reproducible installation, not proof of
 deployment to your own permanent host.
 
+## 2B. Offline permit approval (first usable workflow)
+
+The installed `shards-agent-os-approve` command runs on a **separate,
+trusted approval workstation**, never inside the agent account, operator
+service or gVisor container. It is not an MCP tool or an automated policy
+bypass. The signer private key must never be copied to the sandbox host.
+
+Prepare a private (0700) directory on that issuer workstation. Generate a
+new signer and export the **public verifier only**:
+
+~~~bash
+shards-agent-os-approve keygen \
+  --private-key-file /secure/approver/signing.pem \
+  --public-key-file /secure/approver/verification.hex
+~~~
+
+The signing PEM is created as owner-only 0600; the verifier is public.
+Provision the verified 64-character public hex in the host's root-owned
+`SHARDS_ISSUER_PUBLIC_HEX` setting. The kernel ID, issuer and key ID
+must exactly match the trusted broker configuration.
+
+The agent prepares an `arguments.json` request containing all six
+parameters and transfers it to the approval workstation for human
+inspection. Example computation-only request (the image value must be the
+actual, independently inspected, pinned digest of a preloaded image):
+
+~~~json
+{
+  "image": "busybox@sha256:REPLACE_WITH_REAL_64_DIGIT_SHA256",
+  "argv": ["/bin/echo", "signed-gvisor-execution"],
+  "timeout_seconds": 20,
+  "memory_megabytes": 256,
+  "cpu_millicores": 500,
+  "pids_limit": 32
+}
+~~~
+
+Store the request in a trusted issuer-owned 0600 file; reject mutable
+image tags and unfamiliar commands. First inspect the **whole JSON
+request and its canonical SHA-256 digest**:
+
+~~~bash
+shards-agent-os-approve digest \
+  --arguments-file /secure/approver/arguments.json
+~~~
+
+After explicitly approving the shown workload, issue its single-use
+permit. Copy the exact displayed digest into `--approve-sha256`; the CLI
+must refuse issuance if even one argument, image or resource limit differs
+from the approved bytes. The `--ttl-seconds` is restricted to 10–300
+seconds, with the time window checked against the operator clock.
+
+~~~bash
+shards-agent-os-approve issue \
+  --private-key-file /secure/approver/signing.pem \
+  --arguments-file /secure/approver/arguments.json \
+  --permit-file /secure/approver/permit.json \
+  --approve-sha256 <the-digest-you-inspected> \
+  --issuer independent-approver \
+  --key-id approval-key \
+  --kernel-id sandbox-local \
+  --actor agent-alpha \
+  --ttl-seconds 120
+~~~
+
+Only the produced `permit.json` and the exact `arguments.json` are
+transferred to the unprivileged agent account, each owned by that agent
+with mode 0600. Never distribute the private key. The agent then calls
+`shards-agent-os-sandbox-call` as documented below. The kernel verifies
+the public signature and the exact argument scope, consumes the permit,
+runs one gVisor workload and durably rejects replay.
+
+The offline signer also refuses pre-existing output paths, symlinks,
+group/world-readable private keys, duplicate/unrecognised JSON keys,
+unknown workload fields and mismatching approval digests. Its fixed
+error responses do not print key or permit content.
+
+**Security note:** The human approval step cannot be replaced by
+automatically approving whatever digest the agent submits. Doing so
+would remove the intended independent permission boundary.
+
 ## 3. Submit one authorised sandbox operation
 
 A trusted independent approver must first issue a signed v2 one-use permit
