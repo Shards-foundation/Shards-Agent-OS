@@ -275,6 +275,21 @@ successful and cleaned workloads, 2 for explicit DENY, or 3 for UNKNOWN
 or unsuccessful work. A valid permit is still mandatory even when the
 agent has permission to connect to the socket.
 
+## 3A. Durable Agent OS job workflow
+
+Instead of invoking only the one-shot sandbox-call client, the same
+unprivileged agent account can use the new durable sandbox-enqueue and
+sandbox-run-once (or supervised sandbox-serve) commands. Agent OS stores
+only the immutable workload arguments, permit path, trusted broker socket,
+and expected operator UID; it never issues signing keys or duplicates
+spent permits. Shared HALT and outstanding-job quotas apply to both the
+legacy scheduler and the new sandbox queue.
+
+Follow [Durable sandbox job operations](SANDBOX_JOBS.md) for example
+data processing, permitted execution, durable receipt inspection and
+manual UNKNOWN recovery. The installed CI host pilot proves the actual
+path through a real systemd broker and gVisor.
+
 ## 4. Crash and audit recovery
 
 The broker holds an exclusive audit lock, durably records permit use and
