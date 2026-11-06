@@ -91,10 +91,20 @@ class GVisorExecutor:
     host bind mounts, credentials, host namespace sharing or privilege escalation.
     """
 
-    def __init__(self, *, docker_binary: str | None = None):
+    def __init__(self, *, docker_binary: str | None = None, owner_id: str | None = None):
         self._docker = docker_binary or shutil.which("docker")
         if not self._docker or not os.path.isabs(self._docker):
             raise SandboxUnavailable("A trusted absolute-path Docker CLI is required")
+        if owner_id is not None and (
+            type(owner_id) is not str
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", owner_id)
+        ):
+            raise ValueError("Sandbox owner must be an exact restricted identifier")
+        self._owner_id = owner_id
+
+    @property
+    def owner_id(self) -> str | None:
+        return self._owner_id
 
     def _base(self) -> list[str]:
         return [self._docker, "--host", DOCKER_HOST]
@@ -117,6 +127,10 @@ class GVisorExecutor:
         return self._base() + [
             "run", "--rm", "--pull=never", "--runtime=runsc",
             "--name", name, "--label", "shards.agent-os.sandbox=1",
+            *(
+                ["--label", f"shards.agent-os.owner={self._owner_id}"]
+                if self._owner_id is not None else []
+            ),
             "--network=none", "--read-only", "--cap-drop=ALL",
             "--security-opt", "no-new-privileges",
             "--user", "65532:65532", "--workdir", "/tmp",
