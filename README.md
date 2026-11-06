@@ -104,6 +104,19 @@ protocol and gVisor runtime. The host example still uses a root-equivalent
 trusted Docker service account and **has not been deployed**; this is not
 internet-facing or generally multi-tenant production infrastructure.
 
+### Reproducible single-host pilot setup
+
+Two additional CLI tools streamline installation without bypassing trust
+requirements: `shards-agent-os-doctor` checks Linux/runsc, OS identities,
+private configuration and socket permissions; `shards-agent-os-bootstrap`
+installs the dedicated systemd broker under an explicit root-only
+`--apply --acknowledge-rootful-docker` gate. A dedicated ephemeral
+[real systemd host pilot workflow](.github/workflows/sandbox-host-pilot.yml)
+tests signed execution and restart replay protection. The
+[host guide](docs/SANDBOX_HOST_DEPLOYMENT.md) documents exactly which
+machine prerequisites and independent signing credentials remain necessary.
+No permanent machine is automatically configured by CI.
+
 ## Architecture and operational limits
 
 See [architecture](docs/ARCHITECTURE.md), [operator runbook](docs/OPERATIONS.md) and [security boundaries](docs/SECURITY.md).
