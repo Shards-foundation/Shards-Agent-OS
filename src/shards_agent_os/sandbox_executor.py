@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import os
 import re
 import selectors
@@ -125,7 +124,7 @@ class GVisorExecutor:
             "--memory", f"{spec.memory_megabytes}m",
             "--memory-swap", f"{spec.memory_megabytes}m",
             "--cpus", f"{spec.cpu_millicores / 1000:.3f}",
-            "--tmpfs", " /tmp:rw,nosuid,nodev,noexec,size=64m".strip(),
+            "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m",
             "--log-driver=none",
             spec.image, *spec.argv,
         ]
