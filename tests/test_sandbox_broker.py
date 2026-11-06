@@ -229,13 +229,19 @@ class RealPeerCredentialBrokerTests(unittest.TestCase):
                 self.assertEqual(stat.S_IMODE(audit.stat().st_mode), 0o600)
             finally:
                 for proc in (second, first):
-                    if proc is not None and proc.poll() is None:
-                        proc.terminate()
-                        try:
-                            proc.wait(timeout=8)
-                        except subprocess.TimeoutExpired:
-                            proc.kill()
-                            proc.wait(timeout=8)
+                    if proc is not None:
+                        if proc.poll() is None:
+                            proc.terminate()
+                            try:
+                                proc.wait(timeout=8)
+                            except subprocess.TimeoutExpired:
+                                proc.kill()
+                                proc.wait(timeout=8)
+                        # Captured stderr belongs to the test subprocess.
+                        # Closing it avoids ResourceWarning output breaking
+                        # exact real-test success assertions in CI.
+                        if proc.stderr is not None:
+                            proc.stderr.close()
 
 
 if __name__ == "__main__":
