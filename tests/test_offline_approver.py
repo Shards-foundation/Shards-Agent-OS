@@ -10,6 +10,7 @@ import stat
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from shards_kernel.integrations.wire import permit_from_mapping
@@ -19,6 +20,7 @@ from shards_kernel.permits import canonical_permit_bytes
 from shards_agent_os import offline_approver as approve
 
 _IMAGE = "busybox@sha256:" + "a" * 64
+_PASSPHRASE = b"Test-only offline approver passphrase with 32+ bytes"
 
 
 def params():
@@ -47,6 +49,7 @@ class OfflineApprovalTests(unittest.TestCase):
     def keys(self):
         return approve.generate_key(
             private_path=str(self.private), public_path=str(self.public),
+            passphrase=_PASSPHRASE,
         )
 
     def issue(self, *, digest=None, ttl=120):
@@ -57,13 +60,16 @@ class OfflineApprovalTests(unittest.TestCase):
             approval_digest=digest or approve._request(str(self.request))[1],
             issuer="independent-approver", key_id="approver-public",
             kernel_id="sandbox-pilot", actor="agent-alpha",
-            ttl_seconds=ttl, now_ms=1_900_000_000_000,
+            ttl_seconds=ttl, passphrase=_PASSPHRASE,
+            now_ms=1_900_000_000_000,
         )
 
     def test_public_verifier_only_private_0600(self):
         meta = self.keys()
         self.assertRegex(meta["public_key_hex"], r"^[0-9a-f]{64}$")
         self.assertEqual(stat.S_IMODE(self.private.stat().st_mode), 0o600)
+        self.assertIn(b"BEGIN ENCRYPTED PRIVATE KEY", self.private.read_bytes())
+        self.assertNotIn(b"BEGIN PRIVATE KEY-----", self.private.read_bytes())
         self.assertEqual(stat.S_IMODE(self.public.stat().st_mode), 0o644)
         self.assertNotIn("PRIVATE KEY", self.public.read_text())
         self.assertNotIn("private", json.dumps(meta["public_key_hex"]))
@@ -133,7 +139,7 @@ class OfflineApprovalTests(unittest.TestCase):
                 request_path=str(self.request), output_path=str(self.permit),
                 approval_digest=approve._request(str(self.request))[1],
                 issuer="issuer", key_id="key", kernel_id="kernel", actor="actor",
-                ttl_seconds=60,
+                ttl_seconds=60, passphrase=_PASSPHRASE,
             )
 
     def test_existing_output_cannot_be_overwritten(self):
@@ -168,7 +174,7 @@ class OfflineApprovalTests(unittest.TestCase):
             key_id="approver-public",
             kernel_id="sandbox-pilot",
             actor="agent-alpha",
-            ttl_seconds=120,
+            ttl_seconds=120, passphrase=_PASSPHRASE,
         )
         wire = json.loads(self.permit.read_text())
         kernel = build_persistent_sandbox_kernel(
@@ -207,9 +213,81 @@ class OfflineApprovalTests(unittest.TestCase):
         self.assertTrue(replay.is_error)
         self.assertEqual(len(executor.requests), 1)
 
+
+    def test_wrong_passphrase_fails_closed_without_output(self):
+        self.keys()
+        with self.assertRaises((ValueError, TypeError)):
+            approve.issue_permit(
+                private_key_path=str(self.private),
+                request_path=str(self.request),
+                output_path=str(self.permit),
+                approval_digest=approve._request(str(self.request))[1],
+                issuer="independent-approver", key_id="approver-public",
+                kernel_id="sandbox-pilot", actor="agent-alpha",
+                ttl_seconds=120,
+                passphrase=b"Incorrect key password of sufficient length",
+            )
+        self.assertFalse(self.permit.exists())
+
+    def test_plaintext_legacy_key_is_not_accepted_for_issuance(self):
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        original = Ed25519PrivateKey.generate()
+        self.private.write_bytes(original.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        ))
+        os.chmod(self.private, 0o600)
+        with self.assertRaisesRegex(PermissionError, "Unencrypted legacy"):
+            self.issue()
+        self.assertFalse(self.permit.exists())
+
+    def test_short_or_noninteractive_passphrase_rejected(self):
+        with self.assertRaises(ValueError):
+            self.keys_with_password(b"short")
+        with patch.object(approve.sys.stdin, "isatty", return_value=False):
+            with self.assertRaises(PermissionError):
+                approve._key_passphrase(confirm=False)
+
+    def keys_with_password(self, secret):
+        return approve.generate_key(
+            private_path=str(self.private), public_path=str(self.public),
+            passphrase=secret,
+        )
+
+    def test_cli_issue_never_prints_secret_and_refuses_noninteractive(self):
+        self.keys()
+        digest = approve._request(str(self.request))[1]
+        args = [
+            "issue", "--private-key-file", str(self.private),
+            "--arguments-file", str(self.request),
+            "--permit-file", str(self.permit),
+            "--approve-sha256", digest,
+            "--issuer", "independent-approver",
+            "--key-id", "approver-public",
+            "--kernel-id", "sandbox-pilot",
+            "--actor", "agent-alpha",
+        ]
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr), patch.object(
+            approve.sys.stdin, "isatty", return_value=False,
+        ):
+            self.assertEqual(approve.main(args), 2)
+        self.assertFalse(self.permit.exists())
+        self.assertNotIn("passphrase", stdout.getvalue().lower())
+        with contextlib.redirect_stdout(stdout), patch.object(
+            approve, "_key_passphrase", return_value=_PASSPHRASE,
+        ):
+            self.assertEqual(approve.main(args), 0)
+        self.assertNotIn(_PASSPHRASE.decode(), stdout.getvalue())
+        self.assertTrue(self.permit.exists())
+
     def test_cli_emits_no_signing_key_bytes(self):
         stdout = io.StringIO()
-        with contextlib.redirect_stdout(stdout):
+        with contextlib.redirect_stdout(stdout), patch.object(
+            approve, "_key_passphrase", return_value=_PASSPHRASE,
+        ):
             status = approve.main([
                 "keygen", "--private-key-file", str(self.private),
                 "--public-key-file", str(self.public),
