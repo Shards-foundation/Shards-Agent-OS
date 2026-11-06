@@ -168,7 +168,22 @@ shards-agent-os-approve keygen \
   --public-key-file /secure/approver/verification.hex
 ~~~
 
-The signing PEM is created as owner-only 0600; the verifier is public.
+The signing PEM is **passphrase-encrypted PKCS#8** and saved as owner-only
+0600; the verifier is public. The CLI requires a local interactive terminal
+and prompts twice on key generation, once per permit issuance. It does not
+accept the passphrase as a command-line option, environment variable, JSON
+request or agent-provided input. Maintain separate offline backups of the
+encrypted key and its recovery passphrase; do not put either on the broker.
+
+**Migration from the initial plaintext issuer:** previously created
+unencrypted PEM signing keys are intentionally refused by the updated issuer.
+Generate a fresh encrypted signing key on your independent approver workstation,
+replace the pinned public verifier under trusted host administration, and
+restart the broker. Already issued permits using the old verifier will no
+longer validate; reconcile outstanding operations before rotation. Dispose of
+the legacy key using your organisation's key-retirement procedure; ordinary
+file deletion cannot guarantee erasure on SSD/snapshotted storage.
+
 Provision the verified 64-character public hex in the host's root-owned
 `SHARDS_ISSUER_PUBLIC_HEX` setting. The kernel ID, issuer and key ID
 must exactly match the trusted broker configuration.
@@ -225,8 +240,9 @@ the public signature and the exact argument scope, consumes the permit,
 runs one gVisor workload and durably rejects replay.
 
 The offline signer also refuses pre-existing output paths, symlinks,
-group/world-readable private keys, duplicate/unrecognised JSON keys,
-unknown workload fields and mismatching approval digests. Its fixed
+group/world-readable private keys, unencrypted legacy keys, incorrect
+passphrases, non-interactive signing attempts, duplicate/unrecognised JSON
+keys, unknown workload fields and mismatching approval digests. Its fixed
 error responses do not print key or permit content.
 
 **Security note:** The human approval step cannot be replaced by
