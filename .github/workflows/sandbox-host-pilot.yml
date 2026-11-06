@@ -30,7 +30,6 @@ jobs:
           sudo /opt/shards-agent-os/venv/bin/python -m pip install --disable-pip-version-check '.[kernel]'
           sudo /opt/shards-agent-os/venv/bin/python -c 'import importlib.metadata as m; assert m.version("shards-kernel") == "0.1.3"'
           /opt/shards-agent-os/venv/bin/shards-agent-os-bootstrap --agent-user shards-agent
-          sudo systemd-analyze verify deploy/systemd/shards-agent-os-broker.service
       - name: Register real gVisor runsc runtime
         run: |
           sudo apt-get update -qq
@@ -51,6 +50,7 @@ jobs:
           SHARDS_HOST_PILOT_CI: "1"
         run: |
           /opt/shards-agent-os/venv/bin/python scripts/ci_sandbox_host_pilot.py
+          sudo systemd-analyze verify /etc/systemd/system/shards-agent-os-broker.service
       - name: Verify controlled service cleanup and no owned orphan containers
         if: always()
         run: |
