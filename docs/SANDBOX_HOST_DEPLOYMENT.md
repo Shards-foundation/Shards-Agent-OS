@@ -98,6 +98,60 @@ sudo journalctl -u shards-agent-os-broker.service -n 40 --no-pager
 
 These commands are guidance; no host deployment has been executed here.
 
+## 2A. Automated host preflight and guarded service installation
+
+The repository now includes two executable CLI commands:
+
+- `shards-agent-os-doctor` performs a non-mutating check of Linux,
+  Docker/runsc, the separate operator/agent identities, public verifier
+  configuration, trusted systemd unit and (with `--running`) the operator
+  socket and state directory permissions. Use `--json` for machine-readable
+  evidence. No bearer or private key is printed.
+- `shards-agent-os-bootstrap` provisions the dedicated client-only group and
+  sandbox operator, grants Docker access **only to the trusted operator**,
+  copies the packaged immutable systemd unit and, only when explicitly
+  requested, starts the service. The default without `--apply` is plan-only.
+
+This bootstrap is intentionally **not** a Docker/runsc installer and does
+not generate permit-signing keys or fetch container images. Prepare
+`/opt/shards-agent-os/venv` as a **root-owned trusted installation** with
+the `shards-agent-os` distribution and `.[kernel]` extra; install Docker
+and runsc from trusted sources; pre-create the agent OS account. The parent
+directory `/etc/shards-agent-os` must be root-owned `0700`, with the
+externally approved **public verifier only** in root-owned
+`broker.env` at `0600`. Never put a signing private key here.
+
+Admin-initiated plan and explicit installation:
+
+~~~bash
+sudo /opt/shards-agent-os/venv/bin/shards-agent-os-bootstrap \
+  --agent-user shards-agent
+
+sudo /opt/shards-agent-os/venv/bin/shards-agent-os-bootstrap \
+  --agent-user shards-agent --apply --start \
+  --acknowledge-rootful-docker
+
+sudo /opt/shards-agent-os/venv/bin/shards-agent-os-doctor \
+  --agent-user shards-agent --running --json
+~~~
+
+The command refuses to run as an unprivileged user, to substitute a different
+agent UID, to accept a world-accessible verifier configuration, to give the
+agent Docker access, to use a package path writable by untrusted accounts,
+to start without a registered runsc runtime, or to overwrite a modified
+existing service unit. Existing users and groups are reused rather than
+duplicated. Before retrying any partially failed bootstrap, inspect the
+local service, group memberships and audit paths. Group changes may require
+a new agent login.
+
+A dedicated [installed host pilot CI workflow](../.github/workflows/sandbox-host-pilot.yml)
+recreates the actual venv and systemd installation on a **disposable Ubuntu
+runner**, uses an ephemeral externally controlled issuer, and proves the
+agent cannot access Docker or read audit data while a signed gVisor action
+succeeds. It then restarts the real service and asserts permit replay denial.
+This is independent evidence of reproducible installation, not proof of
+deployment to your own permanent host.
+
 ## 3. Submit one authorised sandbox operation
 
 A trusted independent approver must first issue a signed v2 one-use permit
