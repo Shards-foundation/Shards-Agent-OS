@@ -1,0 +1,56 @@
+# Experimental local-only Linux sandbox broker service
+#
+# DEPLOYMENT REQUIREMENTS:
+# - Create a dedicated nonroot "shards-sandbox" operator service user.
+# - Create a "shards-broker-clients" group; add ONLY the intended agent user.
+# - Give the operator (NOT the agent) access to the Docker daemon socket.
+#   For rootful Docker this is root-equivalent host privilege; use only a
+#   dedicated trusted host until a rootless runtime is separately verified.
+# - Create root-owned /etc/shards-agent-os/broker.env with the pinned values
+#   documented in docs/SANDBOX_HOST_DEPLOYMENT.md (systemd reads this file).
+# - Install the package into /opt/shards-agent-os/venv via your trusted deployer.
+# - NEVER let an agent edit this unit, the environment file, or the state dir.
+#
+# This is a host deployment TEMPLATE, not evidence of deployment or remote
+# multi-tenant certification.
+
+[Unit]
+Description=Shards Agent OS signed gVisor sandbox Unix broker
+After=docker.service
+Requires=docker.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=shards-sandbox
+Group=shards-broker-clients
+SupplementaryGroups=docker
+EnvironmentFile=/etc/shards-agent-os/broker.env
+WorkingDirectory=/var/lib/shards-sandbox
+RuntimeDirectory=shards-sandbox
+RuntimeDirectoryMode=0750
+StateDirectory=shards-sandbox
+StateDirectoryMode=0700
+UMask=0077
+ExecStart=/opt/shards-agent-os/venv/bin/shards-agent-os-broker --socket /run/shards-sandbox/broker.sock --peer-uid ${SHARDS_AGENT_UID} --kernel-id ${SHARDS_KERNEL_ID} --actor ${SHARDS_ACTOR} --audit-db /var/lib/shards-sandbox/audit.sqlite3 --issuer ${SHARDS_ISSUER_ID} --key-id ${SHARDS_KEY_ID} --public-key-hex ${SHARDS_ISSUER_PUBLIC_HEX}
+Restart=on-failure
+RestartSec=4
+TimeoutStopSec=20
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=yes
+ReadWritePaths=/var/lib/shards-sandbox /run/shards-sandbox
+
+[Install]
+WantedBy=multi-user.target
