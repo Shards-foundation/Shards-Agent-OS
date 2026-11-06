@@ -173,7 +173,10 @@ def run_once(
         if control["halted"]:
             conn.commit()
             return None
-        running = conn.execute("SELECT COUNT(*) FROM jobs WHERE status='RUNNING'").fetchone()[0]
+        running = conn.execute(
+            "SELECT (SELECT COUNT(*) FROM jobs WHERE status='RUNNING') + "
+            "(SELECT COUNT(*) FROM sandbox_jobs WHERE status='RUNNING')"
+        ).fetchone()[0]
         if running >= max_running:
             conn.commit()
             return None
