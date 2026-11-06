@@ -96,7 +96,7 @@ class HostIdentityTests(unittest.TestCase):
               patch.object(doctor.os, "stat", return_value=docker_socket),
               patch.object(doctor, "_groups", side_effect=[{56, 55}, {56}])):
             result = doctor._identities("operator", "agent", "clients")
-        self.assertIn("Agent denied Docker", result)
+        self.assertIn("agent denied Docker", result)
 
 
 class RuntimeTests(unittest.TestCase):
