@@ -30,8 +30,19 @@ def command(argv, *, input=None, accept=0, timeout=50):
         check=False,
     )
     if result.returncode != accept:
+        # Only copy the fixed-phase, secret-free bootstrap failure marker.
+        # Raw subprocess stderr can contain sensitive host information.
+        diagnostic = ""
+        if any("shards-agent-os-bootstrap" in arg for arg in argv):
+            approved = next(
+                (line for line in result.stderr.splitlines()
+                 if line.startswith("Sandbox host bootstrap refused:")),
+                "",
+            )
+            diagnostic = " [phase=" + approved[:180] + "]"
         raise RuntimeError(
             f"CI host command failed (exit={result.returncode}): {argv[0:2]!r}"
+            + diagnostic
         )
     return result.stdout.strip()
 
