@@ -82,6 +82,44 @@ Operator identity, Unix socket permissions, container lifecycle supervision,
 audit persistence/recovery and a non-bypassable deployment perimeter are
 required before accepting arbitrary untrusted remote agents.
 
+## Persistent local operator (experimental)
+
+The `shards-agent-os-sandbox` executable is an MCP stdio server for a
+**trusted, independently supervised Linux host process**. It does not sign
+permits or accept private signing keys. The host must pin the public verifier
+key and start it under a Docker-authorised identity that is **not** available
+to the requesting agent.
+
+Example **trusted launcher arguments** (not a command for an untrusted agent):
+
+~~~text
+shards-agent-os-sandbox   --kernel-id sandbox-local   --actor agent-alpha   --audit-db /srv/shards-private/sandbox-audit.sqlite3   --issuer independent-approver   --key-id approval-key   --public-key-hex PUBLIC_ED25519_VERIFIER_HEX
+~~~
+
+The trusted host must create `/srv/shards-private` as an owned **0700**
+directory, and must pin the exact issuer, actor and verifier key outside
+the agent's control. The public key is not a secret, but allowing an agent
+to substitute it would defeat authorisation.
+
+The operator creates its audit database at mode 0600, holds a nonblocking
+single-writer file lock for the service lifetime, and replays persisted audit
+entries and consumed permits when booting. A persistent wall-clock checkpoint
+detects local UTC rollback across restarts. The signed v2 permit must bind the
+exact actor, kernel, action `sandbox.exec`, full workload arguments and
+expiry; operator startup never issues a permit.
+
+The **real-process acceptance test** starts this executable through the official
+MCP stdio SDK, executes a signed workload in runsc, exits, restarts the
+separate operator process with the same audit state, then verifies that the
+original permit is denied. A distinct test checks local 0700/0600 permissions
+and symlink rejection.
+
+Limitations: this does not supply an authenticated remote endpoint or
+a production-grade sandbox service. The OS deployment must isolate
+untrusted agents from the privileged Docker socket, operator process,
+audit directory, signing infrastructure and trusted launcher arguments.
+Host-root compromise and whole-directory rollback remain out of scope.
+
 ## Next integration boundary
 
 The next deployment increment must put the already permit-gated local MCP
