@@ -117,6 +117,18 @@ tests signed execution and restart replay protection. The
 machine prerequisites and independent signing credentials remain necessary.
 No permanent machine is automatically configured by CI.
 
+### Offline signed permit issuance
+
+A human-controlled **`shards-agent-os-approve`** CLI now supports Ed25519
+key generation and one-use `sandbox.exec` permit issuance from a *separate
+trusted approver machine*. It refuses to sign without an explicitly approved
+SHA-256 digest of the complete immutable workload specification. Its private
+key stays outside the agent, Docker host and sandbox; the broker holds only
+the public verifier. See [offline permit issuance and execution](docs/SANDBOX_HOST_DEPLOYMENT.md#2b-offline-permit-approval-first-usable-workflow).
+A local test proves that the resulting token is accepted once by StrictKernel
+and denied after argument tampering or replay. This is not an online approval
+service or a delegation of signing authority to an agent.
+
 ## Architecture and operational limits
 
 See [architecture](docs/ARCHITECTURE.md), [operator runbook](docs/OPERATIONS.md) and [security boundaries](docs/SECURITY.md).
