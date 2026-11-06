@@ -81,6 +81,11 @@ A first gVisor-backed workload executor is available to **trusted local operator
 
 A separately supervised, trusted host may launch the **`shards-agent-os-sandbox`** local stdio MCP server. It uses the pinned public Ed25519 verifier, single-writer locked private SQLite audit ledger, persistent clock high-water mark, and the already-governed `sandbox.exec` handler. Signed single-use permits remain rejected after operator restart. See [sandbox runtime and operator deployment](docs/SANDBOX_EXECUTOR.md).
 
+On restart, the trusted operator also recovers **only its own** labelled
+orphaned gVisor containers under the private audit lock. Recovery is journalled
+before forced cleanup and fails closed on uncertain outcomes; it never retries
+an interrupted workload. The operator identity must be exclusive per daemon.
+
 **Do not give an untrusted agent the operator's OS identity or Docker socket.** The MCP transport is local stdio, not an internet-facing API or an authentication perimeter; the host launcher must enforce separate identities, fixed command/configuration, secret separation and process supervision. Remote, multi-user production execution remains unsupported.
 
 ## Architecture and operational limits
