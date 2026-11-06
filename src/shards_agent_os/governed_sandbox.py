@@ -17,6 +17,34 @@ from .sandbox_executor import ExecutionSpec, GVisorExecutor
 TOOL_NAME = "sandbox.exec"
 
 
+def make_sandbox_handler(runner: GVisorExecutor):
+    """Return one trusted handler reused by local MCP and AF_UNIX broker."""
+    if not isinstance(runner, GVisorExecutor):
+        raise TypeError("A trusted GVisorExecutor is required")
+
+        def sandbox_execute(
+            image: str,
+            argv: list[str],
+            timeout_seconds: int,
+            memory_megabytes: int,
+            cpu_millicores: int,
+            pids_limit: int,
+        ) -> dict[str, Any]:
+            if type(argv) is not list:
+                raise ValueError("Authorised argv must be a JSON array")
+            spec = ExecutionSpec(
+                image=image,
+                argv=tuple(argv),
+                timeout_seconds=timeout_seconds,
+                memory_megabytes=memory_megabytes,
+                cpu_millicores=cpu_millicores,
+                pids_limit=pids_limit,
+            )
+            result = runner.run(spec)
+            return asdict(result)
+    return sandbox_execute
+
+
 def create_governed_sandbox_server(
     kernel: StrictKernel, *,
     actor: str,
@@ -39,27 +67,7 @@ def create_governed_sandbox_server(
     if not isinstance(runner, GVisorExecutor):
         raise TypeError("A trusted GVisorExecutor is required")
 
-    def sandbox_execute(
-        image: str,
-        argv: list[str],
-        timeout_seconds: int,
-        memory_megabytes: int,
-        cpu_millicores: int,
-        pids_limit: int,
-    ) -> dict[str, Any]:
-        if type(argv) is not list:
-            raise ValueError("Authorised argv must be a JSON array")
-        spec = ExecutionSpec(
-            image=image,
-            argv=tuple(argv),
-            timeout_seconds=timeout_seconds,
-            memory_megabytes=memory_megabytes,
-            cpu_millicores=cpu_millicores,
-            pids_limit=pids_limit,
-        )
-        result = runner.run(spec)
-        return asdict(result)
-
+    handler = make_sandbox_handler(runner)
     return create_official_mcp_server(
-        kernel, actor=actor, handlers={TOOL_NAME: sandbox_execute}
+        kernel, actor=actor, handlers={TOOL_NAME: handler}
     )
