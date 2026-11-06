@@ -130,7 +130,7 @@ def _runtime() -> str:
         capture_output=True, text=True, timeout=12, check=False,
         env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
     )
-    if result.returncode != 0 or len(result.stdout) > 16384:
+    if result.returncode != 0 or len(result.stdout) > 131072:
         raise OSError("Cannot inspect local Docker runtimes")
     runtimes = json.loads(result.stdout)
     if type(runtimes) is not dict or "runsc" not in runtimes:
