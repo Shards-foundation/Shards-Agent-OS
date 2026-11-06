@@ -20,10 +20,11 @@ An interval schedule **never executes automatically**. Kernel permits are single
 
 ## Install
 
-Use Python 3.11+ and a private POSIX workstation/server. Until the Shards-Kernel PyPI publishing incident is resolved, the `kernel` extra pins immutable Shards-Kernel source commit `4d521d6aa3c523bdea905de50f50be4133321020`. This is a temporary **immutable Git source pin**, not proof that PyPI 0.1.2 is available.
+Use Python 3.11+ and a private POSIX workstation/server. The optional `kernel` extra installs the published **Shards-Kernel 0.1.3** distribution, including the cryptography and official MCP SDK dependencies. The package remains an experimental single-host reference runtime, not an independently certified OS sandbox.
 
 ```bash
 python -m pip install -e '.[kernel]'
+python -c 'import importlib.metadata as m; assert m.version("shards-kernel") == "0.1.3"'
 python -m unittest discover -s tests -v
 python -m shards_kernel demo --json
 ```
