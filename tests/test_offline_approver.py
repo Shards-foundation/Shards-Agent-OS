@@ -150,6 +150,63 @@ class OfflineApprovalTests(unittest.TestCase):
             with self.subTest(ttl=ttl), self.assertRaises(ValueError):
                 self.issue(ttl=ttl)
 
+    def test_offline_issued_permit_is_accepted_once_by_persistent_kernel(self):
+        import asyncio
+        from mcp import Client
+        from shards_agent_os.sandbox_operator import build_persistent_sandbox_kernel
+        from shards_agent_os.governed_sandbox import create_governed_sandbox_server
+        from test_sandbox_governance import RecordingExecutor
+
+        self.keys()
+        request, digest = approve._request(str(self.request))
+        metadata = approve.issue_permit(
+            private_key_path=str(self.private),
+            request_path=str(self.request),
+            output_path=str(self.permit),
+            approval_digest=digest,
+            issuer="independent-approver",
+            key_id="approver-public",
+            kernel_id="sandbox-pilot",
+            actor="agent-alpha",
+            ttl_seconds=120,
+        )
+        wire = json.loads(self.permit.read_text())
+        kernel = build_persistent_sandbox_kernel(
+            kernel_id="sandbox-pilot",
+            actor="agent-alpha",
+            audit_db=str(self.root / "kernel.sqlite3"),
+            issuer="independent-approver",
+            key_id="approver-public",
+            public_key_hex=self.public.read_text().strip(),
+        )
+        executor = RecordingExecutor()
+        server = create_governed_sandbox_server(
+            kernel, actor="agent-alpha", executor=executor,
+        )
+
+        async def call(permit_data, arguments):
+            async with Client(server, raise_exceptions=True) as client:
+                return await client.call_tool("governed_execute", {
+                    "name": "sandbox.exec",
+                    "arguments": arguments,
+                    "permit": permit_data,
+                })
+
+        tampered = dict(request)
+        tampered["cpu_millicores"] += 100
+        denied = asyncio.run(call(wire, tampered))
+        self.assertTrue(denied.is_error)
+        self.assertEqual(executor.requests, [])
+
+        accepted = asyncio.run(call(wire, request))
+        self.assertFalse(accepted.is_error, accepted)
+        self.assertEqual(len(executor.requests), 1)
+        self.assertEqual(executor.requests[0].fingerprint(), metadata["approval_digest"])
+
+        replay = asyncio.run(call(wire, request))
+        self.assertTrue(replay.is_error)
+        self.assertEqual(len(executor.requests), 1)
+
     def test_cli_emits_no_signing_key_bytes(self):
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
