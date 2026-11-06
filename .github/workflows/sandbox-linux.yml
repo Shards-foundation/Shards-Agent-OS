@@ -1,0 +1,51 @@
+name: gVisor sandbox integration
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  linux-runsc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install Agent OS with published Shards-Kernel
+        run: python -m pip install -e '.[kernel]'
+      - name: Unit tests before enabling runtime
+        run: python -m unittest discover -s tests -p test_sandbox_executor.py -v
+      - name: Install gVisor runsc from official apt repository
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ca-certificates curl gnupg
+          curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" | sudo tee /etc/apt/sources.list.d/gvisor.list
+          sudo apt-get update -qq
+          sudo apt-get install -y runsc
+          sudo runsc install
+          sudo systemctl restart docker
+          runsc --version
+          docker info --format '{{json .Runtimes}}'
+      - name: Preload a pinned-image candidate (no image pulls during workload launch)
+        run: docker pull busybox:1.36
+      - name: Real gVisor isolation and cleanup tests
+        env:
+          SHARDS_SANDBOX_LIVE: "1"
+        run: |
+          export SHARDS_SANDBOX_IMAGE="$(docker image inspect --format '{{index .RepoDigests 0}}' busybox:1.36)"
+          test -n "$SHARDS_SANDBOX_IMAGE"
+          python -m unittest discover -s tests -p test_sandbox_executor.py -v
+      - name: Inspect leftover labelled sandboxes
+        if: always()
+        run: |
+          names="$(docker ps -a --filter label=shards.agent-os.sandbox=1 --format '{{.Names}}' || true)"
+          if [ -n "$names" ]; then
+            printf 'Unexpected surviving sandboxes:\n%s\n' "$names"
+            exit 1
+          fi
