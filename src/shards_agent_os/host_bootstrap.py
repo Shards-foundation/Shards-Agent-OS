@@ -18,6 +18,7 @@ import pwd
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Sequence
 
@@ -172,9 +173,16 @@ def bootstrap(agent_user: str, *, start: bool) -> None:
     _run("systemctl", "daemon-reload")
     if start:
         _run("systemctl", "enable", "--now", "shards-agent-os-broker.service")
-        after = host_doctor.inspect_host(agent=agent_user, running=True)
-        if not all(check.ok for check in after):
-            raise RuntimeError("Broker started but host doctor did not confirm security checks")
+        # Type=simple can report started before the broker binds the Unix socket.
+        # Never claim readiness until the complete trusted-host doctor is green.
+        failed: list[str] = []
+        for _attempt in range(50):
+            after = host_doctor.inspect_host(agent=agent_user, running=True)
+            failed = [check.name for check in after if not check.ok]
+            if not failed:
+                return
+            time.sleep(0.2)
+        raise RuntimeError("Broker readiness preflight failed: " + ",".join(failed))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -200,9 +208,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     try:
         bootstrap(args.agent_user, start=args.start)
-    except Exception:
-        print("Sandbox host bootstrap refused or failed. No deployment success "
-              "is claimed; inspect trusted administrator diagnostics.", file=sys.stderr)
+    except Exception as exc:
+        # All known operator-facing ValueError/PermissionError/RuntimeError
+        # messages in these local preconditions are static or check identifiers.
+        # Never print subprocess stderr, signed permits or raw exception reprs.
+        if type(exc) in (RuntimeError, ValueError, PermissionError):
+            reason = str(exc)
+        else:
+            reason = type(exc).__name__
+        print("Sandbox host bootstrap refused: " + reason
+              + ". No deployment success is claimed.", file=sys.stderr)
         return 2
     print("Sandbox host bootstrap applied; "
           + ("service running and doctor checks passed"
