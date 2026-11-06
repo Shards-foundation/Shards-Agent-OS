@@ -136,11 +136,19 @@ class RealPeerCredentialBrokerTests(unittest.TestCase):
                     close_fds=True,
                 )
                 for _ in range(150):
-                    if sock_path.is_socket():
-                        return process
                     if process.poll() is not None:
                         error = process.communicate(timeout=2)[1].decode(errors="replace")
                         self.fail(f"Broker exited before listening: {error[:400]}")
+                    if sock_path.is_socket():
+                        # A SIGKILL leaves a stale socket pathname. Only a
+                        # successful connect proves the replacement is ready.
+                        try:
+                            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+                                probe.settimeout(0.3)
+                                probe.connect(str(sock_path))
+                            return process
+                        except (ConnectionRefusedError, FileNotFoundError, TimeoutError):
+                            pass
                     time.sleep(0.1)
                 self.fail("Broker never created its local Unix socket")
 
