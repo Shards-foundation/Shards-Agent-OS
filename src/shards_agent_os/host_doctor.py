@@ -108,11 +108,13 @@ def _identities(operator: str, agent: str, client_group: str) -> str:
     docker_group = os.stat("/var/run/docker.sock").st_gid
     if g.gr_gid == docker_group:
         raise PermissionError("Client group must not equal Docker socket group")
-    if g.gr_gid not in _groups(op) or g.gr_gid not in _groups(ag):
+    operator_groups = _groups(op)
+    agent_groups = _groups(ag)
+    if g.gr_gid not in operator_groups or g.gr_gid not in agent_groups:
         raise PermissionError("Broker client group must include both identities")
-    if docker_group in _groups(ag):
+    if docker_group in agent_groups:
         raise PermissionError("Agent must not belong to Docker socket group")
-    if docker_group not in _groups(op):
+    if docker_group not in operator_groups:
         raise PermissionError("Operator must have Docker socket group")
     if os.stat("/var/run/docker.sock").st_mode & stat.S_IWOTH:
         raise PermissionError("Docker socket cannot be world writable")
