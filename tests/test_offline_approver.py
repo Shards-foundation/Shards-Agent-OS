@@ -246,7 +246,7 @@ class OfflineApprovalTests(unittest.TestCase):
     def test_short_or_noninteractive_passphrase_rejected(self):
         with self.assertRaises(ValueError):
             self.keys_with_password(b"short")
-        with patch.object(approve.sys.stdin, "isatty", return_value=False):
+        with patch.object(approve.sys, "stdin", io.StringIO("non-interactive")):
             with self.assertRaises(PermissionError):
                 approve._key_passphrase(confirm=False)
 
