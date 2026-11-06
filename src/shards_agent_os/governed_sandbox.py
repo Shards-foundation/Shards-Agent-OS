@@ -22,26 +22,26 @@ def make_sandbox_handler(runner: GVisorExecutor):
     if not isinstance(runner, GVisorExecutor):
         raise TypeError("A trusted GVisorExecutor is required")
 
-        def sandbox_execute(
-            image: str,
-            argv: list[str],
-            timeout_seconds: int,
-            memory_megabytes: int,
-            cpu_millicores: int,
-            pids_limit: int,
-        ) -> dict[str, Any]:
-            if type(argv) is not list:
-                raise ValueError("Authorised argv must be a JSON array")
-            spec = ExecutionSpec(
-                image=image,
-                argv=tuple(argv),
-                timeout_seconds=timeout_seconds,
-                memory_megabytes=memory_megabytes,
-                cpu_millicores=cpu_millicores,
-                pids_limit=pids_limit,
-            )
-            result = runner.run(spec)
-            return asdict(result)
+    def sandbox_execute(
+        image: str,
+        argv: list[str],
+        timeout_seconds: int,
+        memory_megabytes: int,
+        cpu_millicores: int,
+        pids_limit: int,
+    ) -> dict[str, Any]:
+        if type(argv) is not list:
+            raise ValueError("Authorised argv must be a JSON array")
+        spec = ExecutionSpec(
+            image=image,
+            argv=tuple(argv),
+            timeout_seconds=timeout_seconds,
+            memory_megabytes=memory_megabytes,
+            cpu_millicores=cpu_millicores,
+            pids_limit=pids_limit,
+        )
+        result = runner.run(spec)
+        return asdict(result)
     return sandbox_execute
 
 
