@@ -44,21 +44,7 @@ def _check(name: str, fn) -> Check:
         return Check(name, False, type(exc).__name__)
 
 
-def _private_root_config(path: Path) -> dict[str, str]:
-    info = path.lstat()
-    if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o600:
-        raise PermissionError("Root-owned mode 0600 config required")
-    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
-    fd = os.open(path, flags)
-    try:
-        actual = os.fstat(fd)
-        if (actual.st_ino, actual.st_dev) != (info.st_ino, info.st_dev):
-            raise RuntimeError("Config changed")
-        if actual.st_size > 4096 or actual.st_size < 40:
-            raise ValueError("Config size invalid")
-        body = os.read(fd, 4097)
-    finally:
-        os.close(fd)
+def _parse_environment(body: bytes) -> dict[str, str]:
     if len(body) > 4096 or b"\x00" in body:
         raise ValueError("Config invalid")
     values: dict[str, str] = {}
@@ -82,6 +68,24 @@ def _private_root_config(path: Path) -> dict[str, str]:
         or not _HEX.fullmatch(values["SHARDS_ISSUER_PUBLIC_HEX"])):
         raise ValueError("Invalid environment setting")
     return values
+
+
+def _private_root_config(path: Path) -> dict[str, str]:
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o600:
+        raise PermissionError("Root-owned mode 0600 config required")
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+    fd = os.open(path, flags)
+    try:
+        actual = os.fstat(fd)
+        if (actual.st_ino, actual.st_dev) != (info.st_ino, info.st_dev):
+            raise RuntimeError("Config changed")
+        if actual.st_size > 4096 or actual.st_size < 40:
+            raise ValueError("Config size invalid")
+        body = os.read(fd, 4097)
+    finally:
+        os.close(fd)
+    return _parse_environment(body)
 
 
 def _user(name: str):
