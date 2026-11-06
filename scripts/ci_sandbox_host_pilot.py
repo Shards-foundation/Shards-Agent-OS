@@ -155,38 +155,63 @@ def main() -> int:
         command([
             "sudo", "-n", "chown", "-R", "shards-agent", str(directory),
         ])
-        client = [
-            "sudo", "-n", "-u", "shards-agent",
-            "/opt/shards-agent-os/venv/bin/shards-agent-os-sandbox-call",
-            "--socket", "/run/shards-sandbox/broker.sock",
-            "--operator-uid", str(pwd.getpwnam("shards-sandbox").pw_uid),
-            "--arguments-file", str(arguments),
-            "--permit-file", str(permit),
-        ]
-        accepted = json.loads(command(client))
-        if (accepted.get("decision") != "ALLOW"
-            or accepted.get("result", {}).get("stdout", "").strip()
-                != "systemd-pilot-verified"):
-            raise AssertionError("Signed real systemd broker workload failed")
-        denied = json.loads(command(client, accept=2))
-        if denied.get("decision") != "DENY":
-            raise AssertionError("The consumed permit was accepted twice")
+        try:
+            client = [
+                "sudo", "-n", "-u", "shards-agent",
+                "/opt/shards-agent-os/venv/bin/shards-agent-os-sandbox-call",
+                "--socket", "/run/shards-sandbox/broker.sock",
+                "--operator-uid", str(pwd.getpwnam("shards-sandbox").pw_uid),
+                "--arguments-file", str(arguments),
+                "--permit-file", str(permit),
+            ]
+            accepted = json.loads(command(client))
+            if (accepted.get("decision") != "ALLOW"
+                or accepted.get("result", {}).get("stdout", "").strip()
+                    != "systemd-pilot-verified"):
+                raise AssertionError("Signed real systemd broker workload failed")
+            denied = json.loads(command(client, accept=2))
+            if denied.get("decision") != "DENY":
+                raise AssertionError("The consumed permit was accepted twice")
 
-        command(["sudo", "-n", "systemctl", "restart",
-                 "shards-agent-os-broker.service"])
-        after_restart = json.loads(command(client, accept=2))
-        if after_restart.get("decision") != "DENY":
-            raise AssertionError("Permit replay after systemd restart was accepted")
-        command(["sudo", "-n", "systemctl", "is-active",
-                 "shards-agent-os-broker.service"])
-        # Auditable storage remains entirely unreadable to the agent account.
-        state_probe = subprocess.run([
-            "sudo", "-n", "-u", "shards-agent", "/usr/bin/python3", "-c",
-            "from pathlib import Path; "
-            "Path('/var/lib/shards-sandbox/audit.sqlite3').read_bytes()",
-        ], capture_output=True, timeout=10)
-        if state_probe.returncode == 0:
-            raise AssertionError("Agent could read the trusted audit ledger")
+            command(["sudo", "-n", "systemctl", "restart",
+                     "shards-agent-os-broker.service"])
+            # systemctl Type=simple does not guarantee the Unix socket is bound.
+            # Never retry an UNKNOWN signed operation: wait for a separate
+            # read-only readiness probe *before* issuing the replay test.
+            doctor_call = [
+                "sudo", "-n", "/opt/shards-agent-os/venv/bin/shards-agent-os-doctor",
+                "--agent-user", "shards-agent", "--running", "--json",
+            ]
+            for _attempt in range(50):
+                ready = subprocess.run(
+                    doctor_call, capture_output=True, text=True,
+                    timeout=15, check=False,
+                )
+                if ready.returncode == 0:
+                    break
+                time.sleep(0.2)
+            else:
+                raise AssertionError("Restarted broker never reached trusted readiness")
+            after_restart = json.loads(command(client, accept=2))
+            if after_restart.get("decision") != "DENY":
+                raise AssertionError("Permit replay after systemd restart was accepted")
+            command(["sudo", "-n", "systemctl", "is-active",
+                     "shards-agent-os-broker.service"])
+            # Auditable storage remains entirely unreadable to the agent account.
+            state_probe = subprocess.run([
+                "sudo", "-n", "-u", "shards-agent", "/usr/bin/python3", "-c",
+                "from pathlib import Path; "
+                "Path('/var/lib/shards-sandbox/audit.sqlite3').read_bytes()",
+            ], capture_output=True, timeout=10)
+            if state_probe.returncode == 0:
+                raise AssertionError("Agent could read the trusted audit ledger")
+        finally:
+            # Restore directory ownership to the test runner even when
+            # assertions fail, so TemporaryDirectory cleanup can succeed.
+            command([
+                "sudo", "-n", "chown", "-R",
+                f"{os.getuid()}:{os.getgid()}", str(directory),
+            ])
     print("PASS: real systemd service, external permit, separate Linux UIDs, "
           "gVisor execution, Docker denial, audit denial, replay denial")
     return 0
