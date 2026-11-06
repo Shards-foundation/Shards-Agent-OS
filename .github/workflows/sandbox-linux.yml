@@ -49,15 +49,7 @@ jobs:
             echo "A required signed gVisor test was skipped"
             exit 1
           fi
-          grep -Eq 'test_real_signed_permit_launches_one_gvisor_workload .* \.\.\. ok
-        if: always()
-        run: |
-          names="$(docker ps -a --filter label=shards.agent-os.sandbox=1 --format '{{.Names}}' || true)"
-          if [ -n "$names" ]; then
-            printf 'Unexpected surviving sandboxes:\n%s\n' "$names"
-            exit 1
-          fi
- "$RUNNER_TEMP/signed-sandbox-test.log"
+          grep -Eq 'test_real_signed_permit_launches_one_gvisor_workload .* \.\.\. ok$' "$RUNNER_TEMP/signed-sandbox-test.log"
       - name: Inspect leftover labelled sandboxes
         if: always()
         run: |
