@@ -16,6 +16,8 @@ kernel = ["shards-kernel[crypto,mcp]==0.1.3"]
 [project.scripts]
 shards-agent-os = "shards_agent_os.__main__:main"
 shards-agent-os-sandbox = "shards_agent_os.sandbox_operator:main"
+shards-agent-os-broker = "shards_agent_os.sandbox_broker:main"
+shards-agent-os-sandbox-call = "shards_agent_os.sandbox_client:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

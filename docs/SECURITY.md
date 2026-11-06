@@ -16,4 +16,18 @@ exactly-once effects, mitigate a compromised Docker daemon, or protect a
 privileged operator from a compromised host. Operators must not share an
 owner identity across unrelated daemon sessions or audit databases.
 
+**Host privilege separation:** the experimental long-lived broker
+authenticates a pinned client Linux UID with kernel SO_PEERCRED, requires a
+valid independently signed permit, and runs under a distinct dedicated
+host account. Unix directory/socket permissions limit who can connect, but
+socket permission is not itself authorisation. Client-provided actor IDs,
+issuer configuration and Docker options are never accepted. Its unprivileged
+client verifies the broker socket owner, and has no Docker credentials.
+A rootful Docker socket is root-equivalent; the trusted broker account must
+therefore run only on a host controlled by the operator. The Linux acceptance
+gate must prove that an unprivileged client UID cannot access Docker while
+a signed permitted request can use the broker and cannot replay on restart.
+Actual deployment, rootless operation and remote multi-tenant isolation
+are not claimed.
+
 **Release standard:** passing unit tests is not sufficient for live sensitive operations. Verify signed real-process MCP ALLOW, exact parameter binding and replay DENY, crash/recovery, negative auth, timeouts, audit integrity and host permissions. Production deployment is not claimed.
