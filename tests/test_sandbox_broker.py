@@ -93,7 +93,12 @@ class RealPeerCredentialBrokerTests(unittest.TestCase):
         image = os.getenv("SHARDS_SANDBOX_IMAGE", "")
         self.assertRegex(image, r"@sha256:[0-9a-f]{64}$")
         agent = "shards-ci-agent"
-        group = grp.getgrgid(os.getegid()).gr_name
+        group = "shards-ci-clients"
+        created_group = subprocess.run(
+            ["sudo", "-n", "groupadd", "--system", group],
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+        self.assertEqual(created_group.returncode, 0, created_group.stderr)
         created = subprocess.run(
             ["sudo", "-n", "useradd", "--system", "--no-create-home",
              "--gid", group, agent],
@@ -103,10 +108,18 @@ class RealPeerCredentialBrokerTests(unittest.TestCase):
         agent_uid = int(subprocess.check_output(["id", "-u", agent], text=True).strip())
 
         with tempfile.TemporaryDirectory() as root:
-            os.chmod(root, 0o750)
             path = Path(root)
             socket_dir = path / "socket"
-            socket_dir.mkdir(mode=0o750)
+            socket_dir.mkdir(mode=0o700)
+            # A distinct socket-only group: it grants no Docker membership.
+            for item in (path, socket_dir):
+                ownership = subprocess.run(
+                    ["sudo", "-n", "chgrp", group, str(item)],
+                    capture_output=True, text=True, timeout=10, check=False,
+                )
+                self.assertEqual(ownership.returncode, 0, ownership.stderr)
+            os.chmod(root, 0o750)
+            os.chmod(socket_dir, 0o2750)
             state_dir = path / "state"
             state_dir.mkdir(mode=0o700)
             audit = state_dir / "kernel.sqlite3"
