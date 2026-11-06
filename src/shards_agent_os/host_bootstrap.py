@@ -171,7 +171,22 @@ def bootstrap(agent_user: str, *, start: bool) -> None:
     try:
         _preconditions(agent_user)
     except Exception as exc:
-        raise BootstrapFailure("prerequisites:" + type(exc).__name__) from exc
+        # Diagnostics are selected only from a fixed, source-controlled allowlist.
+        # Never render arbitrary environment or subprocess error strings.
+        known = {
+            "Trusted package ancestry is not root-owned": "trusted-path-owner",
+            "Trusted package ancestry cannot be group/world writable": "trusted-path-mode",
+            "Pinned verifier directory must be root-owned 0700": "verifier-parent-mode",
+            "Root-owned mode 0600 config required": "verifier-file-mode",
+            "Untrusted agent must not access the Docker socket": "agent-docker-membership",
+            "Docker socket is world writable": "docker-socket-world-write",
+            "Root-owned mode 0600 config required": "verifier-file-mode",
+            "Unsafe existing operator identity": "operator-uid-conflict",
+            "Agent cannot be root": "agent-root",
+            "Root-owned mode 0600 config required": "verifier-file-mode",
+        }
+        issue = known.get(str(exc), type(exc).__name__)
+        raise BootstrapFailure("prerequisites:" + issue) from exc
     try:
         _ensure_host_accounts(agent_user)
     except Exception as exc:
