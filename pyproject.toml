@@ -11,7 +11,7 @@ license = {text = "BSL-1.0"}
 dependencies = []
 
 [project.optional-dependencies]
-kernel = ["shards-kernel[crypto,mcp] @ git+https://github.com/Shards-foundation/Shards-kernel.git@4d521d6aa3c523bdea905de50f50be4133321020"]
+kernel = ["shards-kernel[crypto,mcp]==0.1.3"]
 
 [project.scripts]
 shards-agent-os = "shards_agent_os.__main__:main"
