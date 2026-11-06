@@ -28,6 +28,10 @@ jobs:
           sudo mkdir -p /opt/shards-agent-os
           sudo "$(command -v python)" -m venv /opt/shards-agent-os/venv
           sudo /opt/shards-agent-os/venv/bin/python -m pip install --disable-pip-version-check '.[kernel]'
+          # Some hosted runners inherit a group-writable umask. The trusted
+          # installed package, scripts and ancestors must be immutable to
+          # unprivileged users before provisioning a Docker-authorised service.
+          sudo chmod -R go-w /opt/shards-agent-os
           sudo /opt/shards-agent-os/venv/bin/python -c 'import importlib.metadata as m; assert m.version("shards-kernel") == "0.1.3"'
           /opt/shards-agent-os/venv/bin/shards-agent-os-bootstrap --agent-user shards-agent
       - name: Register real gVisor runsc runtime
