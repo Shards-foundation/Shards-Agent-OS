@@ -77,6 +77,12 @@ shards-agent-os --db "$DB" inventory
 
 A first gVisor-backed workload executor is available to **trusted local operators** through the Python module `shards_agent_os.sandbox_executor`. It launches explicitly configured, digest-pinned OCI workloads with network, filesystem, process and resource restrictions. See [sandbox executor and real Linux tests](docs/SANDBOX_EXECUTOR.md). The optional **local MCP governance adapter** can register `sandbox.exec` in a separately configured StrictKernel with public-only Ed25519 permit verifiers. A correctly signed one-use permit is required for an execution request. This is **not** a remotely authenticated or production-hardened sandbox service: host-process identity separation, durable audit/recovery, and a deployed operator remain necessary.
 
+## Durable sandbox operator (Linux, experimental)
+
+A separately supervised, trusted host may launch the **`shards-agent-os-sandbox`** local stdio MCP server. It uses the pinned public Ed25519 verifier, single-writer locked private SQLite audit ledger, persistent clock high-water mark, and the already-governed `sandbox.exec` handler. Signed single-use permits remain rejected after operator restart. See [sandbox runtime and operator deployment](docs/SANDBOX_EXECUTOR.md).
+
+**Do not give an untrusted agent the operator's OS identity or Docker socket.** The MCP transport is local stdio, not an internet-facing API or an authentication perimeter; the host launcher must enforce separate identities, fixed command/configuration, secret separation and process supervision. Remote, multi-user production execution remains unsupported.
+
 ## Architecture and operational limits
 
 See [architecture](docs/ARCHITECTURE.md), [operator runbook](docs/OPERATIONS.md) and [security boundaries](docs/SECURITY.md).
