@@ -9,13 +9,17 @@ jobs:
   linux-runsc:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.15"]
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
       - name: Install Agent OS with published Shards-Kernel
         run: python -m pip install -e '.[kernel]'
       - name: Unit tests before enabling runtime

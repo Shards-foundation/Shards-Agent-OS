@@ -7,6 +7,15 @@ name = "shards-agent-os"
 version = "0.3.0"
 description = "Single-host, fail-closed application runtime governed by Shards-Kernel"
 requires-python = ">=3.11"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
+    "Operating System :: POSIX :: Linux",
+]
 license = {text = "BSL-1.0"}
 dependencies = []
 

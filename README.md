@@ -20,6 +20,14 @@ An interval schedule **never executes automatically**. Kernel permits are single
 
 ## Install
 
+Supported and tested interpreters: **CPython 3.11, 3.12, 3.13, 3.14 and 3.15**.
+The normal CI job validates the published Shards-Kernel 0.1.3 dependency,
+offline permit approval, installed package commands and Python test suite on
+all five interpreters. The separate Linux gVisor workflow performs real
+signed-permit, isolation, recovery and cross-UID acceptance on Python 3.12
+and 3.15; the installed systemd pilot remains pinned to Python 3.12.
+Python 3.16 is not yet supported or claimed.
+
 Use Python 3.11+ and a private POSIX workstation/server. The optional `kernel` extra installs the published **Shards-Kernel 0.1.3** distribution, including the cryptography and official MCP SDK dependencies. The package remains an experimental single-host reference runtime, not an independently certified OS sandbox.
 
 ```bash
