@@ -14,6 +14,11 @@ from .memory import delete, purge_expired, recall, store
 from .recurrence import (create_schedule, list_schedules, due_schedules,
                          release_occurrence, set_schedule_enabled, skip_missed)
 from .scheduler import cancel_pending, enqueue, list_jobs, run_once, reconcile_unknown
+from .sandbox_client import _private_json
+from .sandbox_jobs import (
+    enqueue_sandbox, run_sandbox_once, list_sandbox_jobs,
+    cancel_sandbox_pending, reconcile_sandbox_unknown, serve_sandbox,
+)
 from .storage import open_db
 
 
@@ -55,6 +60,33 @@ def main(argv: list[str] | None = None) -> int:
     daemon.add_argument('--timeout', type=float, default=30.0)
     daemon.add_argument('--poll', type=float, default=1.0)
     daemon.add_argument('--max-running', type=int, default=1)
+    sandbox_enqueue = commands.add_parser(
+        'sandbox-enqueue', help='Queue independently approved sandbox.exec for a protected Unix broker',
+    )
+    sandbox_enqueue.add_argument('--run-at-ms', type=int)
+    sandbox_enqueue.add_argument('--operator-uid', type=int, required=True)
+    sandbox_enqueue.add_argument('--arguments-file', required=True)
+    sandbox_enqueue.add_argument('--permit-file', required=True)
+    sandbox_enqueue.add_argument('--socket', default='/run/shards-sandbox/broker.sock')
+    sandbox_run = commands.add_parser(
+        'sandbox-run-once', help='Claim at most one signed sandbox job; never auto-retry',
+    )
+    sandbox_run.add_argument('--timeout', type=float, default=150.0)
+    sandbox_run.add_argument('--max-running', type=int, default=1)
+    sandbox_serve = commands.add_parser(
+        'sandbox-serve', help='Poll the separate durable sandbox queue',
+    )
+    sandbox_serve.add_argument('--timeout', type=float, default=150.0)
+    sandbox_serve.add_argument('--poll', type=float, default=1.0)
+    sandbox_serve.add_argument('--max-running', type=int, default=1)
+    commands.add_parser('sandbox-list', help='List sandbox jobs without permit paths')
+    sandbox_cancel = commands.add_parser('sandbox-cancel', help='Cancel a pending sandbox job')
+    sandbox_cancel.add_argument('job_id')
+    sandbox_reconcile = commands.add_parser(
+        'sandbox-reconcile-unknown', help='Classify an investigated stuck sandbox claim as UNKNOWN',
+    )
+    sandbox_reconcile.add_argument('job_id')
+    sandbox_reconcile.add_argument('--incident-id', required=True)
     commands.add_parser('list', help='List jobs without displaying permit file paths')
     commands.add_parser('status', help='Summarise control and queue state')
     cancel = commands.add_parser('cancel', help='Cancel pending only')
@@ -118,13 +150,54 @@ def main(argv: list[str] | None = None) -> int:
                 result = {'status': 'HALTED' if control_state(args.db)['halted'] else 'NO_DUE_JOB'}
         elif args.command == 'serve':
             result = {'status': 'STOPPED', 'iterations': serve(args.db, poll_s=args.poll,timeout_s=args.timeout,max_running=args.max_running)}
+        elif args.command == 'sandbox-enqueue':
+            result = {'job_id': enqueue_sandbox(
+                args.db,
+                run_at_ms=args.run_at_ms if args.run_at_ms is not None else int(time.time()*1000),
+                operator_uid=args.operator_uid,
+                arguments=_private_json(args.arguments_file),
+                permit_file=args.permit_file, socket_path=args.socket,
+            ), 'status': 'PENDING', 'authorised': False}
+        elif args.command == 'sandbox-run-once':
+            result = run_sandbox_once(
+                args.db, timeout_s=args.timeout, max_running=args.max_running,
+            )
+            if result is None:
+                result = {'status': 'HALTED' if control_state(args.db)['halted'] else 'NO_DUE_SANDBOX_JOB'}
+        elif args.command == 'sandbox-serve':
+            result = {'status': 'STOPPED', 'iterations': serve_sandbox(
+                args.db, poll_s=args.poll, timeout_s=args.timeout,
+                max_running=args.max_running,
+            )}
+        elif args.command == 'sandbox-list':
+            result = {'jobs': list_sandbox_jobs(args.db)}
+        elif args.command == 'sandbox-cancel':
+            changed = cancel_sandbox_pending(args.db, args.job_id)
+            result = {'job_id': args.job_id, 'status': 'CANCELLED' if changed else 'NOT_CANCELLED'}
+            if not changed:
+                print(json.dumps(result))
+                return 2
+        elif args.command == 'sandbox-reconcile-unknown':
+            changed = reconcile_sandbox_unknown(
+                args.db, job_id=args.job_id, incident_id=args.incident_id,
+            )
+            result = {'job_id': args.job_id, 'status': 'UNKNOWN', 'reconciled': changed}
+            if not changed:
+                print(json.dumps(result))
+                return 2
         elif args.command == 'list':
             result = {'jobs': list_jobs(args.db)}
         elif args.command == 'status':
             with open_db(args.db) as conn:
                 rows = conn.execute('SELECT status,COUNT(*) AS count FROM jobs GROUP BY status').fetchall()
                 mem = conn.execute('SELECT COUNT(*) FROM memory').fetchone()[0]
-            result = {'control': control_state(args.db), 'jobs': {r['status']:r['count'] for r in rows}, 'memory_records':mem}
+                sandboxes = conn.execute(
+                    'SELECT status,COUNT(*) AS count FROM sandbox_jobs GROUP BY status'
+                ).fetchall()
+            result = {'control': control_state(args.db),
+                      'jobs': {r['status']:r['count'] for r in rows},
+                      'sandbox_jobs': {r['status']:r['count'] for r in sandboxes},
+                      'memory_records':mem}
         elif args.command == 'cancel':
             changed = cancel_pending(args.db,args.job_id)
             result = {'job_id':args.job_id,'status':'CANCELLED' if changed else 'NOT_CANCELLED'}

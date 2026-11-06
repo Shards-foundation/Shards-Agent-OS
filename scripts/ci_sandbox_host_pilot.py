@@ -142,11 +142,20 @@ def main() -> int:
         "pids_limit": 32,
     }
     signature = signed_permit(key, params)
+    # A second, distinct signed permit proves actual Agent OS scheduled-job
+    # dispatch, not merely direct access to the local broker socket.
+    queued_params = {**params, "argv": ["/bin/echo", "scheduled-gvisor-verified"]}
+    queued_signature = signed_permit(key, queued_params)
     with tempfile.TemporaryDirectory(prefix="shards-host-pilot-") as root:
         directory = Path(root)
         arguments = directory / "arguments.json"
         permit = directory / "permit.json"
-        for dest, value in ((arguments, params), (permit, signature)):
+        scheduled_args = directory / "scheduled-arguments.json"
+        scheduled_permit = directory / "scheduled-permit.json"
+        for dest, value in (
+            (arguments, params), (permit, signature),
+            (scheduled_args, queued_params), (scheduled_permit, queued_signature),
+        ):
             fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             try:
                 os.write(fd, json.dumps(value, separators=(",", ":")).encode())
@@ -172,6 +181,44 @@ def main() -> int:
             denied = json.loads(command(client, accept=2))
             if denied.get("decision") != "DENY":
                 raise AssertionError("The consumed permit was accepted twice")
+
+            scheduler = [
+                "sudo", "-n", "-u", "shards-agent",
+                "/opt/shards-agent-os/venv/bin/shards-agent-os",
+                "--db", str(directory / "os-jobs.sqlite3"),
+            ]
+            enqueue_args = [
+                "sandbox-enqueue", "--operator-uid",
+                str(pwd.getpwnam("shards-sandbox").pw_uid),
+                "--arguments-file", str(scheduled_args),
+                "--permit-file", str(scheduled_permit),
+            ]
+            enqueued = json.loads(command(scheduler + enqueue_args))
+            if enqueued.get("status") != "PENDING" or enqueued.get("authorised") is not False:
+                raise AssertionError("Sandbox job submission did not remain pending approval")
+            scheduled = json.loads(command(scheduler + ["sandbox-run-once"]))
+            if (scheduled.get("status") != "SUCCEEDED"
+                or scheduled.get("job_id") != enqueued.get("job_id")
+                or scheduled.get("receipt", {}).get("stdout", "").strip()
+                    != "scheduled-gvisor-verified"
+                or scheduled.get("receipt", {}).get("cleanup_confirmed") is not True):
+                raise AssertionError("Scheduled Agent OS gVisor execution failed")
+            listing = json.loads(command(scheduler + ["sandbox-list"]))
+            if (len(listing.get("jobs", [])) != 1
+                or listing["jobs"][0].get("status") != "SUCCEEDED"
+                or str(scheduled_permit) in json.dumps(listing)):
+                raise AssertionError("Sandbox job state or permit-path privacy invalid")
+
+            # A second queued attempt with the same permit must DENY:
+            # distinct job IDs never reset the kernel's nonce consumption.
+            command(scheduler + enqueue_args)
+            replay_job = json.loads(command(scheduler + ["sandbox-run-once"]))
+            if replay_job.get("status") != "DENIED":
+                raise AssertionError("Re-enqueueing consumed sandbox permit succeeded")
+            if json.loads(command(scheduler + ["sandbox-run-once"])).get(
+                "status"
+            ) != "NO_DUE_SANDBOX_JOB":
+                raise AssertionError("Terminal sandbox job was implicitly retried")
 
             command(["sudo", "-n", "systemctl", "restart",
                      "shards-agent-os-broker.service"])
@@ -212,8 +259,9 @@ def main() -> int:
                 "sudo", "-n", "chown", "-R",
                 f"{os.getuid()}:{os.getgid()}", str(directory),
             ])
-    print("PASS: real systemd service, external permit, separate Linux UIDs, "
-          "gVisor execution, Docker denial, audit denial, replay denial")
+    print("PASS: real systemd service, external permits, separate Linux UIDs, "
+          "direct and durable Agent OS gVisor execution, Docker/audit denial, "
+          "replay denial, no implicit retries")
     return 0
 
 

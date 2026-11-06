@@ -55,6 +55,7 @@ def _private_json(path: str) -> dict[str, Any]:
 def call_broker(
     *, socket_path: str, expected_operator_uid: int,
     arguments: dict[str, Any], permit: dict[str, Any],
+    timeout_s: float = 150.0,
 ) -> dict[str, Any]:
     """Submit one signed call over AF_UNIX; never retries on ambiguous failure."""
     if (
@@ -64,6 +65,8 @@ def call_broker(
         or expected_operator_uid == os.geteuid()
     ):
         raise ValueError("A distinct trusted operator UID and absolute socket are required")
+    if type(timeout_s) not in (int, float) or not 1 <= timeout_s <= 180:
+        raise ValueError("Broker wait must be between 1 and 180 seconds")
     info = os.lstat(socket_path)
     if not stat.S_ISSOCK(info.st_mode) or info.st_uid != expected_operator_uid:
         raise PermissionError("Socket does not belong to the pinned operator")
@@ -74,7 +77,9 @@ def call_broker(
     if len(payload) > _MAX_REQUEST:
         raise ValueError("Signed request too large")
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-        client.settimeout(30)
+        # Workloads can run for 120 s plus verified daemon setup/cleanup.
+        # An RPC timeout is UNKNOWN, never a safe reason to retry.
+        client.settimeout(timeout_s)
         client.connect(socket_path)
         client.sendall(payload)
         data = bytearray()

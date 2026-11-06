@@ -11,6 +11,21 @@ Linux/POSIX environment with Python >=3.11, persistent local disk, private `0700
 3. Install this app with `python -m pip install -e '.[kernel]'`, create private state, enqueue one signed permit-bound `echo` job, then run `shards-agent-os --db "$DB" run-once`.
 4. When the one-shot path works and has a verified kernel receipt, supervise `shards-agent-os --db "$DB" serve --poll 1 --max-running 1` on the trusted host. It does not fork or self-install as a system service.
 
+## Scheduled isolated sandbox work
+
+The Linux sandbox operator has a separate durable Agent OS scheduler.
+Provision an independently approved, short-lived signed sandbox.exec
+permit and exact workload JSON on the unprivileged agent's own 0600 files,
+then use sandbox-enqueue and sandbox-run-once (or sandbox-serve for a
+continuous worker). Both schedulers use the same local HALT latch and
+count all outstanding RUNNING jobs toward one capacity limit.
+
+No automatic retries: a crash leaves a RUNNING claim until investigated,
+then sandbox-reconcile-unknown marks it UNKNOWN under an incident ID.
+Confirmed nonzero or timed-out jobs are FAILED with no automatic requeue.
+See [sandbox job runbook](SANDBOX_JOBS.md) for the complete operator flow.
+The sandbox worker and operator must run under DIFFERENT Linux UIDs.
+
 ## Shutdown and incident response
 
 - `shards-agent-os --db "$DB" halt --reason 'maintenance'` prevents *new* jobs from being claimed. This is **not a hard interrupt** of already running work.
