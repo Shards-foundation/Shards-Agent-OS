@@ -73,6 +73,10 @@ shards-agent-os --db "$DB" inventory
 
 **The directory is not a security principal issuer.** `agent-enroll` stores operator notes only; it does not enrol an agent in Shards-Kernel's signed policy. `capability-register` never activates a driver. No CLI input is accepted as a signed permit or an authenticated external device execution.
 
+## Experimental Linux sandbox executor
+
+A first gVisor-backed workload executor is available to **trusted local operators** through the Python module `shards_agent_os.sandbox_executor`. It launches explicitly configured, digest-pinned OCI workloads with network, filesystem, process and resource restrictions. See [sandbox executor and real Linux tests](docs/SANDBOX_EXECUTOR.md). **This is not yet an authorised agent tool:** signed Shards-Kernel permit binding and the authenticated operator integration remain separate work.
+
 ## Architecture and operational limits
 
 See [architecture](docs/ARCHITECTURE.md), [operator runbook](docs/OPERATIONS.md) and [security boundaries](docs/SECURITY.md).
