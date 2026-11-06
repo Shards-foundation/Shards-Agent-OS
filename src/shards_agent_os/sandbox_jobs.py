@@ -11,6 +11,7 @@ import json
 import math
 import os
 import re
+import signal
 import threading
 import time
 import uuid
@@ -283,17 +284,27 @@ def serve_sandbox(
     if max_ticks is not None and (type(max_ticks) is not int or max_ticks < 0):
         raise ValueError("Invalid max ticks")
     event = stop if stop is not None else threading.Event()
+    handlers = {}
+    if stop is None and threading.current_thread() is threading.main_thread():
+        def _stop(_signum, _frame):
+            event.set()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            handlers[sig] = signal.signal(sig, _stop)
     ticks = 0
     from .interrupts import control_state
-    while not event.is_set():
-        if control_state(db_path)["halted"]:
-            break
-        result = run_sandbox_once(
-            db_path, timeout_s=timeout_s, max_running=max_running,
-        )
-        ticks += 1
-        if max_ticks is not None and ticks >= max_ticks:
-            break
-        if result is None:
-            event.wait(poll_s)
-    return ticks
+    try:
+        while not event.is_set():
+            if control_state(db_path)["halted"]:
+                break
+            result = run_sandbox_once(
+                db_path, timeout_s=timeout_s, max_running=max_running,
+            )
+            ticks += 1
+            if max_ticks is not None and ticks >= max_ticks:
+                break
+            if result is None:
+                event.wait(poll_s)
+        return ticks
+    finally:
+        for sig, previous in handlers.items():
+            signal.signal(sig, previous)
