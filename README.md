@@ -88,6 +88,22 @@ an interrupted workload. The operator identity must be exclusive per daemon.
 
 **Do not give an untrusted agent the operator's OS identity or Docker socket.** The MCP transport is local stdio, not an internet-facing API or an authentication perimeter; the host launcher must enforce separate identities, fixed command/configuration, secret separation and process supervision. Remote, multi-user production execution remains unsupported.
 
+## Linux Unix sandbox broker (experimental host service)
+
+A dedicated Linux operator account can now run the long-lived
+**shards-agent-os-broker** service. It accepts signed `sandbox.exec` requests
+over a local Unix socket and authenticates the actual connecting Linux UID via
+`SO_PEERCRED` before reading an untrusted request. Its caller does **not**
+receive the operator UID, signing key or Docker socket.
+
+The accompanying **shards-agent-os-sandbox-call** CLI submits one permit-bound
+request from an unprivileged agent. A systemd service template and a
+[host deployment runbook](docs/SANDBOX_HOST_DEPLOYMENT.md) describe strict
+identity, socket, state and audit separation. CI exercises the real cross-UID
+protocol and gVisor runtime. The host example still uses a root-equivalent
+trusted Docker service account and **has not been deployed**; this is not
+internet-facing or generally multi-tenant production infrastructure.
+
 ## Architecture and operational limits
 
 See [architecture](docs/ARCHITECTURE.md), [operator runbook](docs/OPERATIONS.md) and [security boundaries](docs/SECURITY.md).
