@@ -24,6 +24,7 @@ from shards_kernel.permits import PublicVerificationKey
 
 from .governed_sandbox import create_governed_sandbox_server
 from .sandbox_executor import GVisorExecutor
+from .sandbox_recovery import recover_orphans
 
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 PUBLIC_HEX = re.compile(r"[0-9a-f]{64}\Z")
@@ -119,8 +120,13 @@ def serve_stdio(
             kernel_id=kernel_id, actor=actor, audit_db=str(db),
             issuer=issuer, key_id=key_id, public_key_hex=public_key_hex,
         )
+        # After acquiring the single-writer lock, terminate only this
+        # operator's labelled orphan containers. Any uncertain removal
+        # refuses startup; already consumed permits are never replayed.
+        executor = GVisorExecutor(owner_id=kernel_id)
+        recover_orphans(executor, audit_db=db, owner_id=kernel_id)
         server = create_governed_sandbox_server(
-            kernel, actor=actor, executor=GVisorExecutor(),
+            kernel, actor=actor, executor=executor,
         )
         # Stdout belongs entirely to the official MCP transport.
         server.run(transport="stdio")

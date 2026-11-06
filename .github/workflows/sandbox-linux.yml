@@ -23,6 +23,7 @@ jobs:
           python -m unittest discover -s tests -p test_sandbox_executor.py -v
           python -m unittest discover -s tests -p test_sandbox_governance.py -v
           python -m unittest discover -s tests -p test_sandbox_operator.py -v
+          python -m unittest discover -s tests -p test_sandbox_recovery.py -v
       - name: Install gVisor runsc from official apt repository
         run: |
           sudo apt-get update -qq
@@ -57,6 +58,12 @@ jobs:
             exit 1
           fi
           grep -Eq 'test_real_stdio_operator_executes_once_and_rejects_replay_after_restart .* \.\.\. ok$' "$RUNNER_TEMP/durable-operator-test.log"
+          python -m unittest discover -s tests -p test_sandbox_recovery.py -v 2>&1 | tee "$RUNNER_TEMP/orphan-recovery-test.log"
+          if grep -q "skipped" "$RUNNER_TEMP/orphan-recovery-test.log"; then
+            echo "A required orphan recovery test was skipped"
+            exit 1
+          fi
+          grep -Eq 'test_force_reap_only_owned_orphans_and_verify_journal .* \.\.\. ok$' "$RUNNER_TEMP/orphan-recovery-test.log"
       - name: Inspect leftover labelled sandboxes
         if: always()
         run: |
