@@ -22,6 +22,7 @@ jobs:
         run: |
           python -m unittest discover -s tests -p test_sandbox_executor.py -v
           python -m unittest discover -s tests -p test_sandbox_governance.py -v
+          python -m unittest discover -s tests -p test_sandbox_operator.py -v
       - name: Install gVisor runsc from official apt repository
         run: |
           sudo apt-get update -qq
@@ -50,6 +51,12 @@ jobs:
             exit 1
           fi
           grep -Eq 'test_real_signed_permit_launches_one_gvisor_workload .* \.\.\. ok$' "$RUNNER_TEMP/signed-sandbox-test.log"
+          python -m unittest discover -s tests -p test_sandbox_operator.py -v 2>&1 | tee "$RUNNER_TEMP/durable-operator-test.log"
+          if grep -q "skipped" "$RUNNER_TEMP/durable-operator-test.log"; then
+            echo "A required durable operator test was skipped"
+            exit 1
+          fi
+          grep -Eq 'test_real_stdio_operator_executes_once_and_rejects_replay_after_restart .* \.\.\. ok$' "$RUNNER_TEMP/durable-operator-test.log"
       - name: Inspect leftover labelled sandboxes
         if: always()
         run: |
