@@ -108,7 +108,8 @@ def _kernel_child_env(
     ):
         return env
     python_path = os.path.realpath(sys.executable if executable is None else executable)
-    if not python_path.startswith(prefix + "/bin/"):
+    real_prefix = os.path.realpath(prefix)
+    if not python_path.startswith(real_prefix.rstrip("/") + "/bin/"):
         return env
 
     # Admit ONLY the official Termux execution shim; never arbitrary libraries,
