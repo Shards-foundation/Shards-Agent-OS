@@ -11,7 +11,7 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Mapping
 
 from .storage import open_db as _connect
 
@@ -86,6 +86,44 @@ def cancel_pending(db_path: str | os.PathLike[str], job_id: str) -> bool:
         return result.rowcount == 1
 
 
+
+def _kernel_child_env(
+    parent_env: Mapping[str, str] | None = None, *, executable: str | None = None,
+) -> dict[str, str]:
+    """Pass only the agent bearer and trusted interpreter runtime variables.
+
+    On Android, Termux uses its official termux-exec preload to execute app
+    binaries. Dropping it can cause PermissionError (Errno 13). Never pass a
+    caller-controlled preload or any operator/issuer credentials to MCP.
+    """
+    source = os.environ if parent_env is None else parent_env
+    env = {key: source[key] for key in (
+        "SHARDS_KERNEL_AGENT_TOKEN", "PATH", "HOME",
+        "VIRTUAL_ENV", "LANG", "LC_ALL", "SYSTEMROOT",
+    ) if key in source}
+
+    prefix = source.get("TERMUX__PREFIX") or source.get("PREFIX")
+    if not isinstance(prefix, str) or not re.fullmatch(
+        r"/data/(?:data|user/0)/com\.termux/files/usr", prefix
+    ):
+        return env
+    python_path = os.path.realpath(sys.executable if executable is None else executable)
+    if not python_path.startswith(prefix + "/bin/"):
+        return env
+
+    # Admit ONLY the official Termux execution shim; never arbitrary libraries,
+    # colon-separated preload chains or caller-supplied library locations.
+    preload = source.get("LD_PRELOAD")
+    if preload in {
+        prefix + "/lib/libtermux-exec.so",
+        prefix + "/lib/libtermux-exec-ld-preload.so",
+    }:
+        env["LD_PRELOAD"] = preload
+    if source.get("TMPDIR") == prefix + "/tmp":
+        env["TMPDIR"] = source["TMPDIR"]
+    return env
+
+
 def _invoke_kernel(job: Job, timeout_s: float) -> tuple[int, str]:
     """Use the installed kernel CLI; never construct a permit or use shell=True."""
     args = [
@@ -94,12 +132,9 @@ def _invoke_kernel(job: Job, timeout_s: float) -> tuple[int, str]:
         "--arguments-json", json.dumps(job.arguments, sort_keys=True, separators=(",", ":")),
         "--permit-file", job.permit_file,
     ]
-    # Do not inherit operator/issuer secrets or unrelated service credentials.
-    # Only the agent bearer and minimal interpreter environment cross into MCP.
-    env = {key: os.environ[key] for key in (
-        "SHARDS_KERNEL_AGENT_TOKEN", "PATH", "HOME",
-        "VIRTUAL_ENV", "LANG", "LC_ALL", "SYSTEMROOT",
-    ) if key in os.environ}
+    # A narrow, validated Termux shim is needed on Android; signing and
+    # operator credentials never cross into the MCP child process.
+    env = _kernel_child_env()
     completed = subprocess.run(
         args, capture_output=True, text=True, timeout=timeout_s,
         check=False, env=env,
