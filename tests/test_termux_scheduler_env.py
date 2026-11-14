@@ -76,6 +76,20 @@ class TermuxChildEnvironmentTests(unittest.TestCase):
             _kernel_child_env(src, executable="/tmp/untrusted/bin/python3"),
         )
 
+    def test_android_user_zero_prefix_alias_matches_real_interpreter(self):
+        alias = "/data/user/0/com.termux/files/usr"
+        src = self.source()
+        src["PREFIX"] = alias
+        src["TERMUX__PREFIX"] = alias
+        src["LD_PRELOAD"] = alias + "/lib/libtermux-exec.so"
+        src["TMPDIR"] = alias + "/tmp"
+        def fake_realpath(path):
+            return path.replace("/data/user/0/com.termux/", "/data/data/com.termux/", 1)
+        with patch("shards_agent_os.scheduler.os.path.realpath", side_effect=fake_realpath):
+            env = _kernel_child_env(src, executable=alias + "/bin/python3.13")
+        self.assertEqual(env.get("LD_PRELOAD"), src["LD_PRELOAD"])
+        self.assertEqual(env.get("TMPDIR"), src["TMPDIR"])
+
     def test_unknown_tmpdir_not_passed_to_child(self):
         src = self.source()
         src["TMPDIR"] = "/tmp/suspicious"
