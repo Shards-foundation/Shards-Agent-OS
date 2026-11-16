@@ -1,0 +1,30 @@
+name: Temporal read-only example contracts
+
+on:
+  pull_request:
+    paths:
+      - "examples/temporal/**"
+      - ".github/workflows/temporal-contracts.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-contracts:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.15"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Syntax checks
+        run: python -m compileall -q examples/temporal
+      - name: Security/data contract tests
+        run: python -m unittest discover -s examples/temporal -p test_contracts.py -v
