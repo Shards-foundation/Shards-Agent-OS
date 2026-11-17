@@ -106,6 +106,19 @@ a hard link to the database is refused both by default and under
 corrupt database surfaces a clean structured JSON error with exit code `2`
 rather than a traceback, genuinely absent optional tables render as empty while
 a missing `control` table is an error, and sandbox error text is reduced to an
-allowlisted category. The theme toggle is verified by a headless DOM
-interaction test that asserts the click handler is attached after the
-document is parsed.
+allowlisted category.
+
+The theme toggle is covered by a committed static regression test,
+`test_theme_toggle_is_wired_after_dom_is_parsed`. It asserts that the
+saved-theme restore script precedes the button in the markup and that the click
+handler is wired via `DOMContentLoaded` in a script placed after the button.
+This is a **static HTML/script-placement check**: it inspects where the snippets
+sit in the document and does not execute the script, dispatch a click or prove
+that a listener is attached at runtime.
+
+Separately, and **outside the committed test suite**, the toggle was exercised
+once in a headless DOM harness (jsdom) by dispatching real `click` events and
+asserting the theme flips and persists to `localStorage`, and that a saved theme
+is restored on load. That jsdom check is an ad-hoc external verification: it is
+not committed to the repository and is not run by CI, so it must not be relied
+on as committed coverage.
