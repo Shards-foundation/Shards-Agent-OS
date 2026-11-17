@@ -81,6 +81,21 @@ shards-agent-os --db "$DB" inventory
 
 **The directory is not a security principal issuer.** `agent-enroll` stores operator notes only; it does not enrol an agent in Shards-Kernel's signed policy. `capability-register` never activates a driver. No CLI input is accepted as a signed permit or an authenticated external device execution.
 
+## Offline operational report
+
+Export a self-contained, mobile-first HTML snapshot of local state for review on
+an Android phone — no CDN, no external scripts, no live service:
+
+```bash
+shards-agent-os --db "$DB" export-report --output "$HOME/shards-report.html"
+```
+
+The report opens the database read-only (`mode=ro`, `PRAGMA query_only`) and
+strictly allowlists fields: it never exports permit paths, workload arguments,
+credentials or raw output, and escapes all display values. See
+[offline operational report](docs/REPORT.md).
+
+
 ## Experimental Linux sandbox executor
 
 A first gVisor-backed workload executor is available to **trusted local operators** through the Python module `shards_agent_os.sandbox_executor`. It launches explicitly configured, digest-pinned OCI workloads with network, filesystem, process and resource restrictions. See [sandbox executor and real Linux tests](docs/SANDBOX_EXECUTOR.md). The optional **local MCP governance adapter** can register `sandbox.exec` in a separately configured StrictKernel with public-only Ed25519 permit verifiers. A correctly signed one-use permit is required for an execution request. This is **not** a remotely authenticated or production-hardened sandbox service: host-process identity separation, durable audit/recovery, and a deployed operator remain necessary.
