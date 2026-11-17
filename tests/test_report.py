@@ -242,6 +242,133 @@ class ReportExportTests(unittest.TestCase):
         with self.assertRaises(ReportError):
             export_report(self.db, self.dir / "no_such_dir" / "r.html", now_ms=1)
 
+    # -- output safety (P0) -------------------------------------------------
+    def test_refuses_existing_output_by_default(self):
+        with open_db(self.db):
+            pass
+        self.output.write_text("PRECIOUS", encoding="utf-8")
+        with self.assertRaises(OSError):
+            export_report(self.db, self.output, now_ms=1)
+        self.assertEqual(self.output.read_text(encoding="utf-8"), "PRECIOUS")
+
+    def test_refuses_output_that_is_the_database_path(self):
+        with open_db(self.db):
+            pass
+        before = self.db.read_bytes()
+        with self.assertRaises(OSError):
+            export_report(self.db, self.db, now_ms=1)
+        self.assertEqual(self.db.read_bytes(), before)
+        self.assertEqual(_logical_state(self.db)["control"][0]["halted"], 0)
+
+    def test_refuses_hard_link_to_database_by_default(self):
+        self._seed_running_job()
+        before = self.db.read_bytes()
+        os.link(self.db, self.output)  # a second name for the very same inode
+        with self.assertRaises(OSError):
+            export_report(self.db, self.output, now_ms=1)
+        self.assertEqual(self.db.read_bytes(), before)
+        self.assertEqual(self.output.stat().st_ino, self.db.stat().st_ino)
+
+    def test_overwrite_refuses_hard_link_to_database(self):
+        self._seed_running_job()
+        before = _logical_state(self.db)
+        os.link(self.db, self.output)
+        with self.assertRaises(ReportError):
+            export_report(self.db, self.output, now_ms=1, overwrite=True)
+        self.assertEqual(_logical_state(self.db), before)
+
+    def test_overwrite_refuses_database_path(self):
+        with open_db(self.db):
+            pass
+        before = self.db.read_bytes()
+        with self.assertRaises(ReportError):
+            export_report(self.db, self.db, now_ms=1, overwrite=True)
+        self.assertEqual(self.db.read_bytes(), before)
+
+    def test_overwrite_replaces_existing_report(self):
+        with open_db(self.db):
+            pass
+        self.output.write_text("OLD", encoding="utf-8")
+        result = export_report(self.db, self.output, now_ms=1, overwrite=True)
+        self.assertEqual(result["status"], "EXPORTED")
+        self.assertTrue(result["overwritten"])
+        self.assertIn("Shards Agent OS", self.output.read_text(encoding="utf-8"))
+        self.assertEqual(self.output.stat().st_mode & 0o777, 0o600)
+
+    # -- fail-closed reads (P2) --------------------------------------------
+    def test_absent_optional_tables_render_as_empty(self):
+        with open_db(self.db) as conn:
+            conn.execute("DROP TABLE jobs")
+            conn.execute("DROP TABLE sandbox_jobs")
+            conn.execute("DROP TABLE recurring_schedules")
+        snap = collect_snapshot(self.db, now_ms=1)
+        self.assertEqual(snap["jobs"], [])
+        self.assertEqual(snap["sandbox_jobs"], [])
+        self.assertEqual(snap["schedules"], [])
+
+    def test_missing_control_table_is_an_error_not_empty(self):
+        empty = self.dir / "empty.sqlite"
+        empty.write_bytes(b"")
+        os.chmod(empty, 0o600)
+        with self.assertRaises(ReportError):
+            collect_snapshot(empty, now_ms=1)
+
+    def test_corrupt_database_is_an_error_not_empty(self):
+        corrupt = self.dir / "corrupt.sqlite"
+        corrupt.write_bytes(b"this is definitely not a sqlite database" * 4)
+        os.chmod(corrupt, 0o600)
+        with self.assertRaises(ReportError):
+            collect_snapshot(corrupt, now_ms=1)
+
+    # -- sandbox diagnostic redaction (P3) ----------------------------------
+    def _seed_sandbox_result(self, result: dict, *, status: str = "FAILED") -> None:
+        with open_db(self.db) as conn:
+            conn.execute(
+                "INSERT INTO sandbox_jobs (job_id,run_at_ms,socket_path,operator_uid,"
+                "arguments_json,permit_file,status,result_json,created_at_ms) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                ("e" * 32, 1, "/run/shards-sandbox/broker.sock", OPERATOR_UID,
+                 json.dumps(sandbox_arguments()), self.permit, status,
+                 json.dumps(result), 1),
+            )
+
+    def test_sandbox_error_text_is_reduced_to_allowlisted_category(self):
+        secret_path = "/home/operator/.ssh/id_ed25519"
+        secret_token = "TOPSECRET_TOKEN_ABC123"
+        secret_arg = "SUPER_SECRET_ARGV"
+        error = (f"permission denied reading {secret_path} "
+                 f"token={secret_token} argv={secret_arg}")
+        self._seed_sandbox_result(
+            {"decision": "ALLOW", "exit_code": 126, "error": error},
+        )
+        html = self._export()
+        for secret in (secret_path, secret_token, secret_arg, error):
+            self.assertNotIn(secret, html, f"leaked {secret!r} into report")
+        self.assertIn("PERMISSION_DENIED", html)
+        self.assertIn("Diagnostic", html)
+
+    def test_sandbox_unmatched_error_becomes_unclassified(self):
+        unknown = "kernel oops at 0xdeadbeef while mapping pages"
+        self._seed_sandbox_result({"decision": "ALLOW", "error": unknown})
+        html = self._export()
+        self.assertNotIn("0xdeadbeef", html)
+        self.assertNotIn(unknown, html)
+        self.assertIn("UNCLASSIFIED", html)
+
+    # -- theme control ------------------------------------------------------
+    def test_theme_toggle_is_wired_after_dom_is_parsed(self):
+        with open_db(self.db):
+            pass
+        html = self._export()
+        button_at = html.index('id="theme-toggle"')
+        toggle_at = html.index("DOMContentLoaded")
+        restore_at = html.index("localStorage.getItem")
+        # The saved theme is applied before the button renders (no flash)...
+        self.assertLess(restore_at, button_at)
+        # ...and the click handler is only wired once the DOM is available.
+        self.assertLess(button_at, toggle_at)
+        self.assertIn("addEventListener('click'", html)
+
 
 class ReportCliTests(unittest.TestCase):
     def setUp(self):
@@ -276,6 +403,34 @@ class ReportCliTests(unittest.TestCase):
         completed = self._run()
         self.assertEqual(completed.returncode, 2)
         self.assertEqual(json.loads(completed.stdout)["status"], "ERROR")
+
+    def test_cli_refuses_existing_output_without_touching_it(self):
+        with open_db(self.db):
+            pass
+        self.output.write_text("KEEP", encoding="utf-8")
+        completed = self._run()
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(json.loads(completed.stdout)["status"], "ERROR")
+        self.assertEqual(self.output.read_text(encoding="utf-8"), "KEEP")
+        self.assertNotIn("Traceback", completed.stderr)
+
+    def test_cli_refuses_hard_link_to_database(self):
+        with open_db(self.db):
+            pass
+        before = self.db.read_bytes()
+        os.link(self.db, self.output)
+        completed = self._run()
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(json.loads(completed.stdout)["status"], "ERROR")
+        self.assertEqual(self.db.read_bytes(), before)
+
+    def test_cli_corrupt_database_is_clean_error_not_traceback(self):
+        self.db.write_bytes(b"not a database" * 8)
+        os.chmod(self.db, 0o600)
+        completed = self._run()
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(json.loads(completed.stdout)["status"], "ERROR")
+        self.assertNotIn("Traceback", completed.stderr)
 
     def test_help_lists_export_report(self):
         completed = subprocess.run(

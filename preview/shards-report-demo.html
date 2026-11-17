@@ -108,30 +108,21 @@ footer .mono{font-size:.72rem}
 </style>
 <script>
 (function(){
-  var root=document.documentElement,key='shards-report-theme';
-  function system(){return (window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';}
-  try{var s=localStorage.getItem(key);if(s==='dark'||s==='light'){root.setAttribute('data-theme',s);}}catch(e){}
   try{
-    var b=document.getElementById('theme-toggle');
-    if(b){b.addEventListener('click',function(){
-      var cur=root.getAttribute('data-theme');
-      if(cur!=='dark'&&cur!=='light'){cur=system();}
-      var next=cur==='dark'?'light':'dark';
-      root.setAttribute('data-theme',next);
-      try{localStorage.setItem(key,next);}catch(e){}
-    });}
+    var s=localStorage.getItem('shards-report-theme');
+    if(s==='dark'||s==='light'){document.documentElement.setAttribute('data-theme',s);}
   }catch(e){}
 })();
 </script>
 </head>
 <body>
-<header class="topbar"><div class="brand"><b>Shards Agent OS</b><span>Operational snapshot · 2026-11-17 21:10:08 UTC</span></div><button id="theme-toggle" type="button" aria-label="Toggle colour theme">Theme</button></header>
+<header class="topbar"><div class="brand"><b>Shards Agent OS</b><span>Operational snapshot · 2023-11-14 22:13:20 UTC</span></div><button id="theme-toggle" type="button" aria-label="Toggle colour theme">Theme</button></header>
 <main>
-  <section class="stack" aria-label="Notices"><div class="notice info"><strong>Point-in-time snapshot</strong>Generated 2026-11-17 21:10:08 UTC. This file is a static export, not a live monitoring service. Re-run <span class="mono">export-report</span> for current state.</div><div class="notice danger"><strong>Dispatch is HALTED</strong>New job claims are blocked. In-flight external work is not preempted by halt.<span class="mono"> Reason: operator maintenance window</span></div><div class="notice warn"><strong>Operator reconciliation required</strong>2 job(s) are RUNNING or UNKNOWN. These are never retried automatically; verify external effects before resuming.</div></section>
+  <section class="stack" aria-label="Notices"><div class="notice info"><strong>Point-in-time snapshot</strong>Generated 2023-11-14 22:13:20 UTC. This file is a static export, not a live monitoring service. Re-run <span class="mono">export-report</span> for current state.</div><div class="notice danger"><strong>Dispatch is HALTED</strong>New job claims are blocked. In-flight external work is not preempted by halt.<span class="mono"> Reason: operator maintenance window</span></div><div class="notice warn"><strong>Operator reconciliation required</strong>2 job(s) are RUNNING or UNKNOWN. These are never retried automatically; verify external effects before resuming.</div></section>
 
   <section class="card" aria-label="Halt state">
     <h2>Dispatch control<small>Local halt latch governs new claims only</small></h2>
-    <div class="kv"><div><span class="k">Latch</span><span class="pill p-danger">HALTED</span></div><div><span class="k">Reason</span>operator maintenance window</div><div><span class="k">Updated</span>2026-11-17 21:10:08 UTC</div></div>
+    <div class="kv"><div><span class="k">Latch</span><span class="pill p-danger">HALTED</span></div><div><span class="k">Reason</span>operator maintenance window</div><div><span class="k">Updated</span>2026-11-17 21:31:52 UTC</div></div>
   </section>
 
   <section class="card" aria-label="Job summary">
@@ -141,36 +132,59 @@ footer .mono{font-size:.72rem}
 
   <section class="card" aria-label="Outstanding jobs">
     <h2>Outstanding jobs<small>RUNNING and UNKNOWN require reconciliation</small></h2>
-    <div class="table-wrap"><table><thead><tr><th>Job ID</th><th>Status</th><th>Tool</th><th>Due</th><th>Started</th><th>Finished</th></tr></thead><tbody><tr class="warn"><td class="mono">ffffffffffffffffffffffffffffffff</td><td><span class="pill p-warn">RUNNING</span></td><td>echo</td><td>1970-01-01 00:00:00 UTC</td><td>1970-01-01 00:00:00 UTC</td><td>—</td></tr><tr class="danger"><td class="mono">22222222222222222222222222222222</td><td><span class="pill p-unknown">UNKNOWN</span></td><td>sandbox</td><td>1970-01-01 00:00:00 UTC</td><td>1970-01-01 00:00:00 UTC</td><td>1970-01-01 00:00:04 UTC</td></tr></tbody></table></div>
+    <div class="table-wrap"><table><thead><tr><th>Job ID</th><th>Status</th><th>Tool</th><th>Due</th><th>Started</th><th>Finished</th></tr></thead><tbody><tr class="warn"><td class="mono">cccccccccccccccccccccccccccccccc</td><td><span class="pill p-warn">RUNNING</span></td><td>echo</td><td>1970-01-01 00:00:00 UTC</td><td>1970-01-01 00:00:00 UTC</td><td>—</td></tr><tr class="danger"><td class="mono">ffffffffffffffffffffffffffffffff</td><td><span class="pill p-unknown">UNKNOWN</span></td><td>sandbox</td><td>1970-01-01 00:00:00 UTC</td><td>1970-01-01 00:00:00 UTC</td><td>—</td></tr></tbody></table></div>
   </section>
 
   <section class="card" aria-label="All jobs">
     <h2>All MCP jobs<small>Arguments and permit paths are withheld</small></h2>
-    <div class="table-wrap"><table><thead><tr><th>Job ID</th><th>Status</th><th>Tool</th><th>Due</th><th>Started</th><th>Finished</th></tr></thead><tbody><tr><td class="mono">3db6a6383db34454810d06c5d8d47b5b</td><td><span class="pill p-danger">DENIED</span></td><td>add</td><td>—</td><td>1970-01-01 00:00:00 UTC</td><td>2026-11-17 21:10:08 UTC</td></tr><tr><td class="mono">a541873379ac4351a318e30d30b3b0f5</td><td><span class="pill p-ok">SUCCEEDED</span></td><td>echo</td><td>—</td><td>1970-01-01 00:00:00 UTC</td><td>2026-11-17 21:10:08 UTC</td></tr><tr class="warn"><td class="mono">ffffffffffffffffffffffffffffffff</td><td><span class="pill p-warn">RUNNING</span></td><td>echo</td><td>1970-01-01 00:00:00 UTC</td><td>1970-01-01 00:00:00 UTC</td><td>—</td></tr><tr><td class="mono">83cd51a926824e4381974bb88e48f3dd</td><td><span class="pill p-neutral">PENDING</span></td><td>echo</td><td>2026-11-17 22:10:08 UTC</td><td>—</td><td>—</td></tr></tbody></table></div>
+    <div class="table-wrap"><table><thead><tr><th>Job ID</th><th>Status</th><th>Tool</th><th>Due</th><th>Started</th><th>Finished</th></tr></thead><tbody><tr><td class="mono">c7f5864ba0f1437c8b0eb30cd76120ae</td><td><span class="pill p-ok">SUCCEEDED</span></td><td>echo</td><td>—</td><td>1970-01-01 00:00:00 UTC</td><td>2026-11-17 21:31:52 UTC</td></tr><tr><td class="mono">aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa</td><td><span class="pill p-danger">DENIED</span></td><td>add</td><td>1970-01-01 00:00:00 UTC</td><td>—</td><td>1970-01-01 00:00:00 UTC</td></tr><tr class="warn"><td class="mono">cccccccccccccccccccccccccccccccc</td><td><span class="pill p-warn">RUNNING</span></td><td>echo</td><td>1970-01-01 00:00:00 UTC</td><td>1970-01-01 00:00:00 UTC</td><td>—</td></tr><tr><td class="mono">bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb</td><td><span class="pill p-neutral">PENDING</span></td><td>echo</td><td>2286-11-20 17:46:40 UTC</td><td>—</td><td>—</td></tr></tbody></table></div>
   </section>
 
   <section class="card" aria-label="Sandbox summary">
     <h2>Sandbox job summary<small>Isolated execution queue</small></h2>
-    <div class="grid"><div class="stat"><div class="n">0</div><div class="l">RUNNING</div></div><div class="stat"><div class="n">1</div><div class="l">UNKNOWN</div></div><div class="stat"><div class="n">1</div><div class="l">PENDING</div></div><div class="stat"><div class="n">1</div><div class="l">SUCCEEDED</div></div><div class="stat"><div class="n">0</div><div class="l">FAILED</div></div><div class="stat"><div class="n">0</div><div class="l">DENIED</div></div><div class="stat"><div class="n">0</div><div class="l">CANCELLED</div></div></div>
+    <div class="grid"><div class="stat"><div class="n">0</div><div class="l">RUNNING</div></div><div class="stat"><div class="n">1</div><div class="l">UNKNOWN</div></div><div class="stat"><div class="n">0</div><div class="l">PENDING</div></div><div class="stat"><div class="n">1</div><div class="l">SUCCEEDED</div></div><div class="stat"><div class="n">1</div><div class="l">FAILED</div></div><div class="stat"><div class="n">0</div><div class="l">DENIED</div></div><div class="stat"><div class="n">0</div><div class="l">CANCELLED</div></div></div>
     <div style="margin-top:12px"><div class="kv"><div><span class="k">Sandbox jobs</span>3</div><div><span class="k">Outstanding</span>1</div></div></div>
-    <div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>Job ID</th><th>Status</th><th>Decision</th><th>Exit</th><th>Duration</th><th>Note</th></tr></thead><tbody><tr><td class="mono">11111111111111111111111111111111</td><td><span class="pill p-ok">SUCCEEDED</span></td><td>ALLOW</td><td>0</td><td>4s</td><td class="mono"></td></tr><tr><td class="mono">22222222222222222222222222222222</td><td><span class="pill p-unknown">UNKNOWN</span></td><td>—</td><td>—</td><td>—</td><td class="mono">Execution outcome uncertain</td></tr></tbody></table></div>
+    <div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>Job ID</th><th>Status</th><th>Decision</th><th>Exit</th><th>Duration</th><th>Diagnostic</th></tr></thead><tbody><tr><td class="mono">dddddddddddddddddddddddddddddddd</td><td><span class="pill p-ok">SUCCEEDED</span></td><td>ALLOW</td><td>0</td><td>1s</td><td class="mono">—</td></tr><tr><td class="mono">eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee</td><td><span class="pill p-danger">FAILED</span></td><td>ALLOW</td><td>126</td><td>—</td><td class="mono">PERMISSION_DENIED</td></tr></tbody></table></div>
   </section>
 
   <section class="card" aria-label="Sandbox jobs">
     <h2>All sandbox jobs<small>Workload arguments and output withheld</small></h2>
-    <div class="table-wrap"><table><thead><tr><th>Job ID</th><th>Status</th><th>Kind</th><th>Due</th><th>Started</th><th>Finished</th></tr></thead><tbody><tr><td class="mono">5def7cea49024ac8ad116437b538e04d</td><td><span class="pill p-neutral">PENDING</span></td><td>sandbox</td><td>—</td><td>—</td><td>—</td></tr><tr><td class="mono">11111111111111111111111111111111</td><td><span class="pill p-ok">SUCCEEDED</span></td><td>sandbox</td><td>1970-01-01 00:00:00 UTC</td><td>1970-01-01 00:00:00 UTC</td><td>1970-01-01 00:00:04 UTC</td></tr><tr class="danger"><td class="mono">22222222222222222222222222222222</td><td><span class="pill p-unknown">UNKNOWN</span></td><td>sandbox</td><td>1970-01-01 00:00:00 UTC</td><td>1970-01-01 00:00:00 UTC</td><td>1970-01-01 00:00:04 UTC</td></tr></tbody></table></div>
+    <div class="table-wrap"><table><thead><tr><th>Job ID</th><th>Status</th><th>Kind</th><th>Due</th><th>Started</th><th>Finished</th></tr></thead><tbody><tr><td class="mono">dddddddddddddddddddddddddddddddd</td><td><span class="pill p-ok">SUCCEEDED</span></td><td>sandbox</td><td>1970-01-01 00:00:00 UTC</td><td>1970-01-01 00:00:00 UTC</td><td>1970-01-01 00:00:00 UTC</td></tr><tr><td class="mono">eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee</td><td><span class="pill p-danger">FAILED</span></td><td>sandbox</td><td>1970-01-01 00:00:00 UTC</td><td>1970-01-01 00:00:00 UTC</td><td>—</td></tr><tr class="danger"><td class="mono">ffffffffffffffffffffffffffffffff</td><td><span class="pill p-unknown">UNKNOWN</span></td><td>sandbox</td><td>1970-01-01 00:00:00 UTC</td><td>1970-01-01 00:00:00 UTC</td><td>—</td></tr></tbody></table></div>
   </section>
 
   <section class="card" aria-label="Schedules">
     <h2>Scheduling<small>Inert templates; each occurrence needs a fresh permit</small></h2>
     <div style="margin-bottom:12px"><div class="kv"><div><span class="k">Templates</span>2</div><div><span class="k">Enabled</span>2</div></div></div>
-    <div class="table-wrap"><table><thead><tr><th>Name</th><th>Tool</th><th>Interval</th><th>Next Due</th><th>State</th><th>Skipped</th></tr></thead><tbody><tr><td>heartbeat</td><td>echo</td><td>every 1h 0m</td><td>1970-01-01 00:00:01 UTC</td><td><span class="pill p-ok">enabled</span></td><td>0</td></tr><tr><td>nightly-compact</td><td>add</td><td>every 1d 0h</td><td>1970-01-01 00:00:02 UTC</td><td><span class="pill p-ok">enabled</span></td><td>0</td></tr></tbody></table></div>
+    <div class="table-wrap"><table><thead><tr><th>Name</th><th>Tool</th><th>Interval</th><th>Next Due</th><th>State</th><th>Skipped</th></tr></thead><tbody><tr><td>heartbeat</td><td>echo</td><td>every 1m 0s</td><td>1970-01-01 00:00:01 UTC</td><td><span class="pill p-ok">enabled</span></td><td>0</td></tr><tr><td>nightly-report</td><td>echo</td><td>every 1d 0h</td><td>1970-01-01 00:00:01 UTC</td><td><span class="pill p-ok">enabled</span></td><td>0</td></tr></tbody></table></div>
   </section>
 </main>
 <footer>
   <div>Shards Agent OS <span class="mono">0.3.0</span> — read-only operational snapshot</div>
   <div>Permit paths, workload arguments, credentials and raw output are never exported.</div>
-  <div class="mono">generated 2026-11-17 21:10:08 UTC</div>
+  <div class="mono">generated 2023-11-14 22:13:20 UTC</div>
 </footer>
+<script>
+(function(){
+  function wire(){
+    var root=document.documentElement,key='shards-report-theme';
+    var b=document.getElementById('theme-toggle');
+    if(!b){return;}
+    b.addEventListener('click',function(){
+      var cur=root.getAttribute('data-theme');
+      if(cur!=='dark'&&cur!=='light'){
+        cur=(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';
+      }
+      var next=cur==='dark'?'light':'dark';
+      root.setAttribute('data-theme',next);
+      try{localStorage.setItem(key,next);}catch(e){}
+    });
+  }
+  if(document.readyState==='loading'){
+    document.addEventListener('DOMContentLoaded',wire);
+  }else{
+    wire();
+  }
+})();
+</script>
 </body>
 </html>

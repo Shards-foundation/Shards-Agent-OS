@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import sys
 import time
 
@@ -124,6 +125,8 @@ def main(argv: list[str] | None = None) -> int:
         'export-report', help='Write a read-only, offline HTML operational snapshot',
     )
     export.add_argument('--output', required=True, help='Absolute path of the HTML report to write')
+    export.add_argument('--overwrite', action='store_true',
+                        help='Atomically replace an existing report file')
     schedule = commands.add_parser('schedule-add', help='Register an inert interval template, no permit')
     schedule.add_argument('--name', required=True)
     schedule.add_argument('--every-ms', type=int, required=True)
@@ -253,10 +256,11 @@ def main(argv: list[str] | None = None) -> int:
                       'changed': set_schedule_enabled(args.db,args.schedule_id,enabled),
                       'enabled':enabled}
         elif args.command == 'export-report':
-            result = export_report(args.db, args.output)
+            result = export_report(args.db, args.output, overwrite=args.overwrite)
         else:
             result = inventory(args.db)
-    except (ValueError, OSError, OverflowError, TypeError, json.JSONDecodeError):
+    except (ValueError, OSError, OverflowError, TypeError,
+            json.JSONDecodeError, sqlite3.Error):
         print(json.dumps({'status':'ERROR','error':'Invalid input or local state'}))
         return 2
     print(json.dumps(result,sort_keys=True,separators=(',',':'),allow_nan=False))

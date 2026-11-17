@@ -12,6 +12,22 @@ shards-agent-os --db "$DB" export-report --output /absolute/path/shards-report.h
 The command prints a small JSON summary (counts and `status: EXPORTED`) and
 writes the report to `--output`.
 
+### Safe output creation
+
+By default the output must **not already exist**. The file is created
+atomically with `O_CREAT | O_EXCL | O_NOFOLLOW`, so an existing report, a
+symbolic link or a hard link to the source database is refused before anything
+is written. The source SQLite database is never a valid output target: even
+when it is reachable through a different path or a hard link (same
+`st_dev`/`st_ino`), the write is rejected. On any failure — validation, write
+error or interruption — the partially created file is unlinked and the earlier
+state is preserved.
+
+To intentionally refresh an existing report, pass `--overwrite`. It still
+refuses symlinks and the database itself, and replaces the target atomically
+via a `0600` temporary file in the same directory followed by `os.replace`, so
+a reader never observes a partial file.
+
 ## What the report shows
 
 * **Point-in-time snapshot banner** — the report is explicitly labelled as a
@@ -35,10 +51,12 @@ Empty datasets render explicit empty-state text rather than a blank panel.
 |---|---|
 | Read-only | The SQLite file is opened `mode=ro` with `PRAGMA query_only=ON`. The exporter never inserts, updates, deletes, enqueues or executes a job, and cannot change the halt latch or schedule state. |
 | Allowlisted fields | Only named columns are selected (`job_id`, `tool`, `status`, timestamps, schedule metadata). Permit paths, permit contents, agent bearer tokens and workload arguments are never read. |
-| No raw output | Sandbox `stdout`/`stderr`, workload fingerprints and error payloads beyond a bounded, escaped note are omitted. |
+| Redacted diagnostics | Raw sandbox error text is never exported. It is matched against a fixed allowlist of coarse categories (`TIMEOUT`, `PERMISSION_DENIED`, `UNAUTHORISED`, `INTEGRITY_MISMATCH`, `IMAGE_NOT_FOUND`, `PATH_NOT_FOUND`, `NOT_FOUND`, `RESOURCE_LIMIT`, `TERMINATED`, `CANCELLED`, `BROKER_UNAVAILABLE`, `UNCLASSIFIED`); unmatched text becomes `UNCLASSIFIED`. Embedded credentials, absolute paths and workload arguments cannot leak. |
+| No raw output | Sandbox `stdout`/`stderr`, workload fingerprints and exit payloads beyond decision, exit code, duration and the diagnostic category are omitted. |
 | Escaped display values | Every interpolated value is HTML-escaped, so a malicious halt reason, schedule name or stored error cannot inject markup or script. |
 | Offline | No CDNs, no `<link>`/external `<script src>`, no fonts, no analytics. The only script is a small inline theme toggle that carries no data. |
-| Private output | The report is written as a `0600` regular file with `O_NOFOLLOW`; a symlink target is refused. |
+| Private output | The report is created with `O_CREAT`/`O_EXCL`/`O_NOFOLLOW` as a `0600` regular file. Existing targets, symlinks and hard links to the database are refused. |
+| Fail-closed reads | Optional tables are probed via `sqlite_master`. A genuinely absent table renders as empty; corruption, lock timeouts or malformed queries raise an error instead of being silently reported as empty. |
 | No creation side effect | A missing database is rejected (exit code `2`) rather than created. |
 
 ## Limitations
@@ -72,7 +90,7 @@ it in any browser. It works fully offline.
 ## Tests
 
 ```bash
-python -m unittest tests.test_report -v
+python -Werror::ResourceWarning -m unittest tests.test_report -v
 ```
 
 The tests cover: status/halt summarisation, empty states, read-only guarantees
@@ -80,3 +98,14 @@ The tests cover: status/halt summarisation, empty states, read-only guarantees
 points are patched to fail if ever called), HTML/script-escaping of malicious
 values, absence of permits/arguments/output, offline self-containment,
 `0600` output permissions, symlink refusal, and the CLI contract.
+
+Regression tests also prove that the database cannot be destroyed: an existing
+output is refused without being touched, the database path itself is refused,
+a hard link to the database is refused both by default and under
+`--overwrite`, `--overwrite` still replaces an ordinary report atomically, a
+corrupt database surfaces a clean structured JSON error with exit code `2`
+rather than a traceback, genuinely absent optional tables render as empty while
+a missing `control` table is an error, and sandbox error text is reduced to an
+allowlisted category. The theme toggle is verified by a headless DOM
+interaction test that asserts the click handler is attached after the
+document is parsed.

@@ -13,8 +13,13 @@ Security posture:
   permit contents, agent bearer credentials, workload arguments and raw
   stdout/stderr are never read or emitted.
 * All values are HTML-escaped before interpolation, so a malicious operator
-  supplied halt reason, schedule name or sandbox error string cannot inject
-  markup or script.
+  supplied halt reason or schedule name cannot inject markup or script.
+* Stored sandbox error text is never exported verbatim; it is reduced to a
+  coarse allowlisted diagnostic category so embedded credentials, absolute
+  paths or workload arguments cannot leak into the report.
+* The output file is created with ``O_EXCL`` by default, so an existing report,
+  a symlink or a hard link to the database is refused without truncating
+  anything.  The source database is never a valid output target.
 """
 from __future__ import annotations
 
@@ -23,6 +28,7 @@ import json
 import os
 import sqlite3
 import stat
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -52,7 +58,42 @@ _CONTROL_COLUMNS = ("halted", "reason", "updated_at_ms")
 # intentionally omitted.
 _SANDBOX_RESULT_KEYS = ("decision", "exit_code", "duration_ms")
 _ALLOWED_DECISIONS = frozenset(("ALLOW", "DENY"))
-_MAX_ERROR_CHARS = 200
+
+# Stored sandbox error text is arbitrary and may embed a credential, an
+# absolute path or a workload argument, so it is never exported.  Instead the
+# raw text is matched against coarse patterns and only the resulting category
+# (itself from a fixed allowlist) is emitted.
+_DIAGNOSTIC_RULES = (
+    ("timed out", "TIMEOUT"),
+    ("timeout", "TIMEOUT"),
+    ("deadline exceeded", "TIMEOUT"),
+    ("permission denied", "PERMISSION_DENIED"),
+    ("operation not permitted", "PERMISSION_DENIED"),
+    ("not permitted", "PERMISSION_DENIED"),
+    ("unauthorised", "UNAUTHORISED"),
+    ("unauthorized", "UNAUTHORISED"),
+    ("invalid permit", "UNAUTHORISED"),
+    ("fingerprint", "INTEGRITY_MISMATCH"),
+    ("mismatch", "INTEGRITY_MISMATCH"),
+    ("no such image", "IMAGE_NOT_FOUND"),
+    ("no such file", "PATH_NOT_FOUND"),
+    ("not found", "NOT_FOUND"),
+    ("out of memory", "RESOURCE_LIMIT"),
+    ("memory limit", "RESOURCE_LIMIT"),
+    ("cpu limit", "RESOURCE_LIMIT"),
+    ("pids limit", "RESOURCE_LIMIT"),
+    ("no space left", "RESOURCE_LIMIT"),
+    ("killed", "TERMINATED"),
+    ("terminated", "TERMINATED"),
+    ("signal", "TERMINATED"),
+    ("cancel", "CANCELLED"),
+    ("connection refused", "BROKER_UNAVAILABLE"),
+    ("socket", "BROKER_UNAVAILABLE"),
+    ("broker", "BROKER_UNAVAILABLE"),
+)
+_DIAGNOSTIC_CATEGORIES = frozenset(
+    category for _, category in _DIAGNOSTIC_RULES
+) | {"UNCLASSIFIED"}
 
 JOB_STATUS_ORDER = (
     "RUNNING", "UNKNOWN", "PENDING", "SUCCEEDED", "DENIED", "CANCELLED",
@@ -99,24 +140,55 @@ def _open_readonly(db_path: str | os.PathLike[str]) -> sqlite3.Connection:
     uri = "file:" + quote(str(path), safe="/:") + "?mode=ro"
     try:
         conn = sqlite3.connect(uri, uri=True, timeout=5, factory=PrivateConnection)
-    except sqlite3.OperationalError as exc:
+    except sqlite3.Error as exc:
         raise ReportError("Database cannot be opened read-only") from exc
     conn.row_factory = sqlite3.Row
     # Belt-and-braces: reject any accidental write even if a caller mistakes it.
-    conn.execute("PRAGMA query_only=ON")
+    try:
+        conn.execute("PRAGMA query_only=ON")
+    except sqlite3.Error as exc:
+        conn.close()
+        raise ReportError("Database rejected read-only mode") from exc
     return conn
 
 
-def _optional_rows(conn: sqlite3.Connection, query: str) -> list[sqlite3.Row]:
-    """Read a table that may be absent in an older state file."""
+def _optional_rows(
+    conn: sqlite3.Connection, table: str, query: str,
+) -> list[sqlite3.Row]:
+    """Read a table that may be absent in an older state file.
+
+    Only a genuinely absent table yields an empty result.  A present table
+    that cannot be read (corruption, a lock timeout or schema drift) is a
+    fail-closed error: it must never be reported as healthy-but-empty.
+    """
+    try:
+        present = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (table,),
+        ).fetchone()
+    except sqlite3.Error as exc:
+        raise ReportError(f"Cannot inspect schema for optional table {table}") from exc
+    if present is None:
+        return []
     try:
         return conn.execute(query).fetchall()
-    except sqlite3.OperationalError:
-        return []
+    except sqlite3.Error as exc:
+        raise ReportError(f"Optional table {table} is present but unreadable") from exc
 
 
 def _select_allowlisted(row: sqlite3.Row, columns: tuple[str, ...]) -> dict:
     return {column: row[column] for column in columns if column in row.keys()}
+
+
+def _diagnostic_category(raw: object) -> str | None:
+    """Reduce arbitrary stored error text to an allowlisted category."""
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    lowered = raw.casefold()
+    for needle, category in _DIAGNOSTIC_RULES:
+        if needle in lowered and category in _DIAGNOSTIC_CATEGORIES:
+            return category
+    return "UNCLASSIFIED"
 
 
 def _safe_sandbox_result(raw: object) -> dict | None:
@@ -136,9 +208,10 @@ def _safe_sandbox_result(raw: object) -> dict | None:
                 safe[key] = value
         elif isinstance(value, int) and not isinstance(value, bool) and value >= 0:
             safe[key] = value
-    error = parsed.get("error")
-    if isinstance(error, str) and error:
-        safe["error"] = error[:_MAX_ERROR_CHARS]
+    # The raw error string is intentionally discarded; only the category is kept.
+    category = _diagnostic_category(parsed.get("error"))
+    if category is not None:
+        safe["diagnostic"] = category
     return safe or None
 
 
@@ -149,30 +222,40 @@ def collect_snapshot(
     now = int(time.time() * 1000) if now_ms is None else now_ms
     if isinstance(now, bool) or not isinstance(now, int) or now < 0:
         raise ReportError("Invalid report clock")
-    with _open_readonly(db_path) as conn:
+    conn: sqlite3.Connection | None = None
+    try:
+        conn = _open_readonly(db_path)
         control_row = conn.execute(
             "SELECT halted,reason,updated_at_ms FROM control WHERE singleton=1"
         ).fetchone()
-        control = (
-            _select_allowlisted(control_row, _CONTROL_COLUMNS)
-            if control_row is not None else {"halted": 0, "reason": "", "updated_at_ms": 0}
-        )
         job_rows = _optional_rows(
-            conn,
+            conn, "jobs",
             "SELECT job_id,tool,status,run_at_ms,created_at_ms,started_at_ms,"
             "finished_at_ms FROM jobs ORDER BY run_at_ms,job_id",
         )
         sandbox_rows = _optional_rows(
-            conn,
+            conn, "sandbox_jobs",
             "SELECT job_id,status,run_at_ms,created_at_ms,started_at_ms,"
             "finished_at_ms,result_json FROM sandbox_jobs ORDER BY run_at_ms,job_id",
         )
         schedule_rows = _optional_rows(
-            conn,
+            conn, "recurring_schedules",
             "SELECT schedule_id,name,interval_ms,next_due_ms,window_ms,tool,"
             "enabled,last_job_id,skipped_intervals FROM recurring_schedules "
             "ORDER BY name",
         )
+    except sqlite3.Error as exc:
+        # Corruption, a lock timeout or a malformed query must surface as a
+        # clean error, never as a traceback or a silently empty report.
+        raise ReportError("Database state could not be read") from exc
+    finally:
+        if conn is not None:
+            conn.close()
+
+    control = (
+        _select_allowlisted(control_row, _CONTROL_COLUMNS)
+        if control_row is not None else {"halted": 0, "reason": "", "updated_at_ms": 0}
+    )
 
     jobs = [_select_allowlisted(row, _JOB_COLUMNS) for row in job_rows]
     sandbox_jobs = []
@@ -312,21 +395,36 @@ footer{color:var(--muted);font-size:.75rem;text-align:center;padding:4px 8px 24p
 footer .mono{font-size:.72rem}
 """
 
-_SCRIPT = """
+_SCRIPT_THEME_RESTORE = """
 (function(){
-  var root=document.documentElement,key='shards-report-theme';
-  function system(){return (window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';}
-  try{var s=localStorage.getItem(key);if(s==='dark'||s==='light'){root.setAttribute('data-theme',s);}}catch(e){}
   try{
+    var s=localStorage.getItem('shards-report-theme');
+    if(s==='dark'||s==='light'){document.documentElement.setAttribute('data-theme',s);}
+  }catch(e){}
+})();
+"""
+
+_SCRIPT_THEME_TOGGLE = """
+(function(){
+  function wire(){
+    var root=document.documentElement,key='shards-report-theme';
     var b=document.getElementById('theme-toggle');
-    if(b){b.addEventListener('click',function(){
+    if(!b){return;}
+    b.addEventListener('click',function(){
       var cur=root.getAttribute('data-theme');
-      if(cur!=='dark'&&cur!=='light'){cur=system();}
+      if(cur!=='dark'&&cur!=='light'){
+        cur=(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';
+      }
       var next=cur==='dark'?'light':'dark';
       root.setAttribute('data-theme',next);
       try{localStorage.setItem(key,next);}catch(e){}
-    });}
-  }catch(e){}
+    });
+  }
+  if(document.readyState==='loading'){
+    document.addEventListener('DOMContentLoaded',wire);
+  }else{
+    wire();
+  }
 })();
 """
 
@@ -419,7 +517,7 @@ def _sandbox_outcomes_table(jobs: list[dict]) -> str:
         decision = result.get("decision", "—")
         exit_code = result.get("exit_code", "—")
         duration = _fmt_duration(result.get("duration_ms"))
-        note = _escape(result.get("error", ""))
+        diagnostic = result.get("diagnostic", "—")
         rows.append(
             "<tr>"
             f'<td class="mono">{_escape(job.get("job_id", ""))}</td>'
@@ -427,13 +525,13 @@ def _sandbox_outcomes_table(jobs: list[dict]) -> str:
             f"<td>{_escape(decision)}</td>"
             f"<td>{_escape(exit_code)}</td>"
             f"<td>{_escape(duration)}</td>"
-            f'<td class="mono">{note}</td>'
+            f'<td class="mono">{_escape(diagnostic)}</td>'
             "</tr>"
         )
     return (
         '<div class="table-wrap" style="margin-top:12px"><table><thead><tr>'
         "<th>Job ID</th><th>Status</th><th>Decision</th><th>Exit</th>"
-        "<th>Duration</th><th>Note</th></tr></thead><tbody>"
+        "<th>Duration</th><th>Diagnostic</th></tr></thead><tbody>"
         + "".join(rows) + "</tbody></table></div>"
     )
 
@@ -608,7 +706,7 @@ def render_report(snapshot: dict) -> str:
         '<meta name="referrer" content="no-referrer">\n'
         "<title>Shards Agent OS — Operational Snapshot</title>\n"
         f"<style>{_CSS}</style>\n"
-        f"<script>{_SCRIPT}</script>\n"
+        f"<script>{_SCRIPT_THEME_RESTORE}</script>\n"
         "</head>\n<body>\n"
         '<header class="topbar">'
         '<div class="brand"><b>Shards Agent OS</b>'
@@ -616,43 +714,122 @@ def render_report(snapshot: dict) -> str:
         '<button id="theme-toggle" type="button" aria-label="Toggle colour theme">Theme</button>'
         "</header>\n"
         + body
-        + "\n</body>\n</html>\n"
+        + f"\n<script>{_SCRIPT_THEME_TOGGLE}</script>\n"
+        + "</body>\n</html>\n"
     )
 
 
-def _write_output(output_path: str | os.PathLike[str], document: str) -> None:
-    """Write the report to a private regular file; refuse symlink targets."""
-    path = Path(output_path)
-    if not path.is_absolute() or not path.parent.is_dir():
-        raise ReportError("Output requires an absolute path and existing parent directory")
-    data = document.encode("utf-8")
+def _write_all(fd: int, data: bytes) -> None:
+    view = memoryview(data)
+    while view:
+        view = view[os.write(fd, view):]
+
+
+def _create_output(path: Path, data: bytes) -> None:
+    """Create a brand-new private report file; refuse any existing target.
+
+    ``O_EXCL`` makes the existence check and the creation atomic, so an
+    existing report, a symlink, or a hard link to the source database is
+    refused *without* truncating anything.  Because the target is guaranteed
+    new, a failure can only ever remove this process's own partial file.
+    """
     fd = os.open(
         path,
-        os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
         | getattr(os, "O_CLOEXEC", 0),
         0o600,
     )
     try:
         info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode):
+        if not stat.S_ISREG(info.st_mode):  # defensive; O_EXCL forbids reuse
             raise ReportError("Output must be a regular file")
         os.fchmod(fd, 0o600)
-        os.write(fd, data)
+        _write_all(fd, data)
+    except BaseException:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        raise
     finally:
         os.close(fd)
 
 
+def _replace_output(db_path: str | os.PathLike[str], path: Path, data: bytes) -> None:
+    """Replace an existing report atomically, never the source database.
+
+    Only reachable with an explicit ``overwrite`` request.  The target is
+    rejected if it is a symlink, a non-regular file, or the same inode as the
+    database (which also covers a hard link to it).  The new content is written
+    to a private temporary file and ``os.replace``d into place, so a failure at
+    any point leaves the previous file intact.
+    """
+    try:
+        target = os.lstat(path)
+    except FileNotFoundError:
+        target = None
+    if target is not None:
+        if stat.S_ISLNK(target.st_mode):
+            raise ReportError("Refusing to write through a symbolic link")
+        if not stat.S_ISREG(target.st_mode):
+            raise ReportError("Output must be a regular file")
+        try:
+            database = os.stat(db_path)
+        except OSError:
+            database = None
+        if database is not None and (database.st_dev, database.st_ino) == (
+                target.st_dev, target.st_ino):
+            raise ReportError("Refusing to overwrite the source database")
+    fd, temp_name = tempfile.mkstemp(prefix=".shards-report-", dir=str(path.parent))
+    try:
+        os.fchmod(fd, 0o600)
+        _write_all(fd, data)
+        os.fsync(fd)
+        os.close(fd)
+        fd = -1
+        os.replace(temp_name, path)
+    except BaseException:
+        if fd >= 0:
+            os.close(fd)
+        try:
+            os.unlink(temp_name)
+        except OSError:
+            pass
+        raise
+
+
+def _write_output(
+    db_path: str | os.PathLike[str], output_path: str | os.PathLike[str],
+    document: str, *, overwrite: bool = False,
+) -> None:
+    """Write the report to a private regular file, refusing unsafe targets."""
+    path = Path(output_path)
+    if not path.is_absolute() or not path.parent.is_dir():
+        raise ReportError("Output requires an absolute path and existing parent directory")
+    data = document.encode("utf-8")
+    if overwrite:
+        _replace_output(db_path, path, data)
+    else:
+        _create_output(path, data)
+
+
 def export_report(
     db_path: str | os.PathLike[str], output_path: str | os.PathLike[str],
-    *, now_ms: int | None = None,
+    *, now_ms: int | None = None, overwrite: bool = False,
 ) -> dict:
-    """Export a self-contained HTML operational snapshot. Read-only, offline."""
+    """Export a self-contained HTML operational snapshot. Read-only, offline.
+
+    By default an existing output path is refused (``O_EXCL``); pass
+    ``overwrite=True`` to atomically replace a prior report.  The source
+    database is never a valid destination in either mode.
+    """
     snapshot = collect_snapshot(db_path, now_ms=now_ms)
     document = render_report(snapshot)
-    _write_output(output_path, document)
+    _write_output(db_path, output_path, document, overwrite=overwrite)
     return {
         "status": "EXPORTED",
         "output": str(Path(output_path)),
+        "overwritten": bool(overwrite),
         "generated_at_ms": snapshot["generated_at_ms"],
         "jobs": len(snapshot["jobs"]),
         "sandbox_jobs": len(snapshot["sandbox_jobs"]),
