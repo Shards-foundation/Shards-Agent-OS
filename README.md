@@ -102,6 +102,12 @@ alive — and a recorded `SUCCEEDED` never implies that external business effect
 were independently verified. A missing or malformed id returns an explicit
 `NOT_FOUND` / `UNREADABLE` result rather than an error. Private execution
 arguments, permit paths, socket paths and raw workload output are never included.
+For harness tasks the report also reconciles each step's cached state with its
+linked durable job record, without writing back to the database. It preserves
+the cached parent state separately, marks mixed completed/unreleased steps as
+`PARTIAL`, and treats missing or unknown child records as uncertain. UNKNOWN
+MCP/sandbox receipts include only bounded, operator-safe error and incident
+identifiers, not raw exception text or private workload output.
 
 
 ## Experimental Linux sandbox executor
