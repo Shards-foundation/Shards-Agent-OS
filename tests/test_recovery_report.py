@@ -5,6 +5,8 @@ made, and every test asserts that producing a report never mutates a job.
 """
 from __future__ import annotations
 
+from contextlib import closing
+
 import json
 import os
 import sqlite3
@@ -244,7 +246,7 @@ class RecoveryReportTests(unittest.TestCase):
             {"tool": "echo", "port": 8765, "arguments": {"text": "second"}},
         ])
         job_id = self.add()
-        with sqlite3.connect(self.db) as conn:
+        with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute(
                 "UPDATE jobs SET status='SUCCEEDED', result_json=? WHERE job_id=?",
                 (json.dumps({"decision": "ALLOW", "request_id": REQUEST_ID,
@@ -275,7 +277,7 @@ class RecoveryReportTests(unittest.TestCase):
         ])
         job_id = self.add()
         self._set_running(job_id)
-        with sqlite3.connect(self.db) as conn:
+        with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute(
                 "UPDATE harness_steps SET status='QUEUED',job_id=? "
                 "WHERE task_id=? AND ordinal=0", (job_id, task_id),
@@ -283,7 +285,7 @@ class RecoveryReportTests(unittest.TestCase):
         running = build_recovery_report(self.db, task_id)
         self.assertEqual(running["durable_state"], "RUNNING")
         self.assertTrue(running["manual_reconciliation_required"])
-        with sqlite3.connect(self.db) as conn:
+        with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute(
                 "UPDATE jobs SET status='UNKNOWN',result_json=? WHERE job_id=?",
                 (json.dumps({"error": "Execution outcome uncertain"}), job_id),
@@ -291,7 +293,7 @@ class RecoveryReportTests(unittest.TestCase):
         unknown = build_recovery_report(self.db, task_id)
         self.assertEqual(unknown["durable_state"], "UNKNOWN")
         self.assertTrue(unknown["manual_reconciliation_required"])
-        with sqlite3.connect(self.db) as conn:
+        with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute("DELETE FROM jobs WHERE job_id=?", (job_id,))
         missing = build_recovery_report(self.db, task_id)
         self.assertEqual(missing["durable_state"], "UNKNOWN")
@@ -315,7 +317,7 @@ class RecoveryReportTests(unittest.TestCase):
             permit_file="/private/sandbox-permit.json",
             operator_uid=OPERATOR_UID, now_ms=0,
         )
-        with sqlite3.connect(self.db) as conn:
+        with closing(sqlite3.connect(self.db)) as conn, conn:
             conn.execute(
                 "UPDATE sandbox_jobs SET status='RUNNING' WHERE job_id=?",
                 (sandbox_id,),
