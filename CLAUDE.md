@@ -1,6 +1,6 @@
 # CLAUDE.md — Shards Agent OS
 
-Operational guide for Claude sessions working in this repository. It is **guidance, not a runtime security boundary and not a permission grant**. Nothing here authorises an action; the task you were given, the repository's own documents and Shards-Kernel permits do. If this file disagrees with source, tests or `docs/`, those win; report the drift.
+Operational guide for Claude sessions working in this repository. It is **guidance, not a runtime security boundary and not a permission grant**. Nothing here authorises an action. Work requires an authorised task scope; protected execution additionally requires valid Shards-Kernel permits where applicable. Repository documents describe behaviour and constraints but never grant permission. If this file disagrees with source, tests or `docs/`, those win; report the drift.
 
 ## What this repository is
 
@@ -31,9 +31,9 @@ Operational guide for Claude sessions working in this repository. It is **guidan
 
 - **Scheduling.** SQLite-backed jobs with atomic `BEGIN IMMEDIATE` claims, one-shot `run-once` and polling `serve`, and a running-job capacity shared by the legacy and sandbox queues. Interval schedules are inert templates; each occurrence needs a freshly issued, independently signed permit passed to `schedule-release`. Missed windows are skipped, never replayed. Agent OS never issues permits and queue admission is not authorisation.
 - **Kernel integration.** Shards-Kernel holds execution authority: signed one-use permits bound to the exact tool and arguments. Agent OS schedules and dispatches already-authorised operations and cannot grant itself authority. Legacy execution goes only through the kernel's `mcp-call` path with a minimal environment and an enrolled agent token; the reference operator supports `echo` and `add` only.
-- **Interrupts and recovery.** `halt` blocks new claims only; it does not revoke permits or stop work already underway. `resume` is a local latch clear, not cryptographic authorisation, and cannot revive a halted kernel. Timeouts, crashes and malformed receipts leave `RUNNING` or become `UNKNOWN`; these are never automatically retried and are cleared only by explicit operator reconciliation with an incident ID, after independent evidence. Never replay a permit or action to "find out" what happened.
+- **Interrupts and recovery.** `halt` blocks new claims only; it does not revoke permits or stop work already underway. `resume` is a local latch clear, not cryptographic authorisation, and cannot revive a halted kernel. A crash after claiming work can leave `RUNNING`. Malformed, uncorrelated or unverified receipts become terminal `UNKNOWN`; sandbox `TIMEOUT`, `PROCESS_ERROR` and `OUTPUT_LIMIT` with confirmed cleanup become terminal `FAILED`. After independent operator investigation, `reconcile-unknown` and `sandbox-reconcile-unknown` can move only a stale `RUNNING` claim to `UNKNOWN` with an incident ID; they do not clear an existing `UNKNOWN`, requeue an action or establish the external outcome. No automatic retry occurs. Never replay a permit or action to "find out" what happened.
 - **Memory and inventory.** Memory is typed, operator-controlled local JSON (working/episodic/semantic/procedural labels, TTL, provenance, version checks), stored as plaintext; namespaces are partitions, not access control. The agent/device directory is unauthenticated metadata: it does not authenticate agents and never executes device actions. There is no vector search, learned reasoning or autonomous memory.
-- **Harness.** Durable sequential coordination on the existing scheduler. Each step needs its own separately issued permit. No DAG engine, planner, LLM, agent spawning or permit issuance. The `github.list_workflow_runs` read path is a fixed, read-only, port-0 adapter that depends on a separately maintained `shards_github_agent` package which is not in this repository.
+- **Harness.** Durable sequential coordination on the existing scheduler. Each governed `echo` or `add` execution step needs its own separately issued signed permit. The `github.list_workflow_runs` observation is a permitless-at-the-harness-boundary, fixed, read-only, port-0 trusted local adapter backed by a separately maintained `shards_github_agent` package, not a new permission to perform GitHub writes. No DAG engine, planner, LLM, agent spawning or independent permit issuance is provided by the harness.
 - **Experimental sandbox (Linux).** Digest-pinned OCI workloads under gVisor `runsc`; no fallback to `runc`. Trusted operator UID versus unprivileged agent UID; a local Unix broker authenticates the connecting UID with `SO_PEERCRED`; signed `sandbox.exec` permits must bind the full workload; the approver is offline (`shards-agent-os-approve`, encrypted key, 10–300 s TTL) and the host holds only the public verifier. The operator keeps a durable audit ledger, consumed-permit replay protection and labelled-orphan recovery. A rootful Docker socket is root-equivalent, so the broker account must be trusted and the agent must never reach it.
 - **Maturity.** Distinguish *locally supported and tested* from *deployed on a real host* from *remotely available* from *production-certified*. Only the first is claimed. Passing CI, including the Linux runsc and systemd host-pilot workflows, is evidence for ephemeral runners, not production readiness. Do not claim the project is a certified OS sandbox.
 
@@ -48,7 +48,7 @@ Operational guide for Claude sessions working in this repository. It is **guidan
 ## Working in a Claude session
 
 - **Do not assume capabilities.** Check what you have (shell, `git`, Python, Docker, `runsc`, network, GitHub write access, a working Shards-Kernel operator). Do not request tokens or create credentials. If a check is impossible, report it as `NOT RUN` with the reason rather than inferring a result.
-- **Before editing:** confirm the repository, branch and exact `git rev-parse HEAD` against the SHA in your task; check `git status`; confirm the target file state. If the base differs or the target already exists, stop and report; do not rebase silently. Inspect other branches and PRs read-only (`git ls-remote`); never touch PRs outside your task.
+- **Before editing:** confirm the repository, branch and exact `git rev-parse HEAD` against the SHA in your task; check `git status`; confirm the target file state. If the required base SHA differs, stop and report; do not rebase silently. For a **file-creation** task, stop if the target already exists. For an **edit** task, inspect the existing target and its current diff; stop on unexpected content or conflicting uncommitted changes, not merely because the file exists. Inspect other branches and PRs read-only (`git ls-remote`); never touch PRs outside your task.
 - **Navigate narrowly:** `git ls-files`, `grep -n`, and `sed -n` ranges beat reading whole files. Read the module, its test, then the doc section that claims behaviour.
 - **Change minimally:** do only the scoped change. No drive-by refactors, formatting sweeps, dependency or version edits, or CI and policy changes unless asked. Report adjacent ideas separately instead of implementing them.
 - **Context recovery** after compaction or a new session: re-read this file and your task statement; run `git branch --show-current`, `git rev-parse HEAD`, `git status --short` and `git diff --stat`; re-read the files you were changing; re-verify rather than trusting a remembered summary.
@@ -61,8 +61,11 @@ Run what is proportionate and say what you did not run.
 python -m pip install -e '.[kernel]'
 python -Werror::ResourceWarning -m unittest discover -s tests -v   # as in .github/workflows/ci.yml
 python -m compileall -q src/shards_agent_os
-git diff --check
-git diff --name-only            # confirm only intended paths changed
+git diff --check                 # unstaged whitespace errors
+git diff --cached --check        # staged whitespace errors
+git diff --name-only             # unstaged changed paths
+git diff --cached --name-only    # staged changed paths
+git status --short               # includes untracked files
 ```
 
 - Without the `kernel` extra, live signed-kernel tests skip; a skip is not a pass for that behaviour.
