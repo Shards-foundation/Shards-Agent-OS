@@ -66,7 +66,7 @@ git diff --name-only            # confirm only intended paths changed
 ```
 
 - Without the `kernel` extra, live signed-kernel tests skip; a skip is not a pass for that behaviour.
-- Linux sandbox tests (`test_sandbox_*`) need Linux, Docker, `runsc` and `SHARDS_SANDBOX_LIVE=1` with `SHARDS_SANDBOX_IMAGE` set to a digest-pinned image. The CI workflow `sandbox-linux.yml` fails if required signed-runtime tests are skipped. `sandbox-host-pilot.yml` runs the installed systemd pilot on Python 3.12 and needs a disposable Ubuntu runner. Do not try these on a workstation you care about; the bootstrap tool is rootful and gated by `--apply --acknowledge-rootful-docker`.
+- Live Linux sandbox cases in `test_sandbox_*` require Linux, Docker, `runsc` and `SHARDS_SANDBOX_LIVE=1` with `SHARDS_SANDBOX_IMAGE` set to a digest-pinned image; non-live tests in those modules run in the ordinary unit-test suite, while only the gated live cases are skipped without those prerequisites. The CI workflow `sandbox-linux.yml` fails if required signed-runtime tests are skipped. `sandbox-host-pilot.yml` runs the installed systemd pilot on Python 3.12 and needs a disposable Ubuntu runner. Do not try these on a workstation you care about; the bootstrap tool is rootful and gated by `--apply --acknowledge-rootful-docker`.
 - Documentation-only changes: verify referenced paths and relative links exist, check technical statements against source and tests, and run `git diff --check`. No repository docs-validation script exists; do not invent one.
 - A docs change does not require the full Python or Linux suites. Say they were not run.
 
