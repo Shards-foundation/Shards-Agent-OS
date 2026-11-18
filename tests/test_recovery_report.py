@@ -236,6 +236,101 @@ class RecoveryReportTests(unittest.TestCase):
 
 
 
+    def test_harness_partial_progress_overrides_stale_parent(self):
+        from shards_agent_os.harness import create_task
+
+        task_id = create_task(self.db, name="stale parent", steps=[
+            {"tool": "echo", "port": 8765, "arguments": {"text": "first"}},
+            {"tool": "echo", "port": 8765, "arguments": {"text": "second"}},
+        ])
+        job_id = self.add()
+        with sqlite3.connect(self.db) as conn:
+            conn.execute(
+                "UPDATE jobs SET status='SUCCEEDED', result_json=? WHERE job_id=?",
+                (json.dumps({"decision": "ALLOW", "request_id": REQUEST_ID,
+                             "result": "test"}), job_id),
+            )
+            conn.execute(
+                "UPDATE harness_steps SET status='QUEUED',job_id=? "
+                "WHERE task_id=? AND ordinal=0", (job_id, task_id),
+            )
+        before = self._fingerprint()
+        report = build_recovery_report(self.db, task_id)
+        self.assertEqual(report["recorded_task_state"], "WAITING_PERMIT")
+        self.assertEqual(report["durable_state"], "PARTIAL")
+        self.assertEqual(report["completion"], "PARTIAL")
+        self.assertTrue(report["partial_progress"])
+        self.assertEqual(report["step_progress"], {"succeeded": 1, "total": 2})
+        self.assertEqual([step["status"] for step in report["steps"]],
+                         ["SUCCEEDED", "WAITING_PERMIT"])
+        self.assertEqual(report["steps"][0]["recorded_step_state"], "QUEUED")
+        self.assertFalse(report["manual_reconciliation_required"])
+        self.assertEqual(self._fingerprint(), before)
+
+    def test_harness_linked_running_unknown_and_missing_jobs_fail_closed(self):
+        from shards_agent_os.harness import create_task
+
+        task_id = create_task(self.db, name="uncertain task", steps=[
+            {"tool": "echo", "port": 8765, "arguments": {"text": "first"}},
+        ])
+        job_id = self.add()
+        self._set_running(job_id)
+        with sqlite3.connect(self.db) as conn:
+            conn.execute(
+                "UPDATE harness_steps SET status='QUEUED',job_id=? "
+                "WHERE task_id=? AND ordinal=0", (job_id, task_id),
+            )
+        running = build_recovery_report(self.db, task_id)
+        self.assertEqual(running["durable_state"], "RUNNING")
+        self.assertTrue(running["manual_reconciliation_required"])
+        with sqlite3.connect(self.db) as conn:
+            conn.execute(
+                "UPDATE jobs SET status='UNKNOWN',result_json=? WHERE job_id=?",
+                (json.dumps({"error": "Execution outcome uncertain"}), job_id),
+            )
+        unknown = build_recovery_report(self.db, task_id)
+        self.assertEqual(unknown["durable_state"], "UNKNOWN")
+        self.assertTrue(unknown["manual_reconciliation_required"])
+        with sqlite3.connect(self.db) as conn:
+            conn.execute("DELETE FROM jobs WHERE job_id=?", (job_id,))
+        missing = build_recovery_report(self.db, task_id)
+        self.assertEqual(missing["durable_state"], "UNKNOWN")
+        self.assertTrue(missing["manual_reconciliation_required"])
+
+    def test_unknown_receipts_preserve_bounded_error_and_incident_id(self):
+        from shards_agent_os.scheduler import reconcile_unknown
+        from shards_agent_os.sandbox_jobs import reconcile_sandbox_unknown
+
+        mcp_id = self.add()
+        self._set_running(mcp_id)
+        self.assertTrue(reconcile_unknown(self.db, mcp_id, "INC-123"))
+        mcp_receipt = build_recovery_report(self.db, mcp_id)
+        self.assertEqual(mcp_receipt["evidence_reference"]["incident_id"], "INC-123")
+        self.assertEqual(mcp_receipt["evidence_reference"]["error"],
+                         "Operator moved RUNNING to UNKNOWN")
+        self.assertTrue(mcp_receipt["manual_reconciliation_required"])
+
+        sandbox_id = enqueue_sandbox(
+            self.db, run_at_ms=1, arguments=_sandbox_params(CANARY),
+            permit_file="/private/sandbox-permit.json",
+            operator_uid=OPERATOR_UID, now_ms=0,
+        )
+        with sqlite3.connect(self.db) as conn:
+            conn.execute(
+                "UPDATE sandbox_jobs SET status='RUNNING' WHERE job_id=?",
+                (sandbox_id,),
+            )
+        self.assertTrue(reconcile_sandbox_unknown(
+            self.db, job_id=sandbox_id, incident_id="INC-SANDBOX-123",
+        ))
+        receipt = build_recovery_report(self.db, sandbox_id)
+        self.assertEqual(receipt["evidence_reference"]["incident_id"],
+                         "INC-SANDBOX-123")
+        self.assertEqual(receipt["evidence_reference"]["error"],
+                         "Manually reconciled to UNKNOWN")
+        self.assertNotIn(CANARY, json.dumps(receipt))
+
+
 class RecoveryReportCliTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
