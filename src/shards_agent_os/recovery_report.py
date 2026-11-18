@@ -20,6 +20,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .harness import _JOB_TO_STEP, _READ_TOOL
+
 _JOB_ID = re.compile(r"[0-9a-f]{32}")
 _SCHEMA = "shards-agent-os/recovery-report-v1"
 
@@ -35,6 +37,7 @@ _COMPLETION = {
     "CANCELLED": "NOT_COMPLETED",
     "WAITING_PERMIT": "NOT_STARTED",
     "QUEUED": "NOT_STARTED",
+    "PARTIAL": "PARTIAL",
 }
 # Only these two states require an operator reconciliation decision.
 _RECONCILE = frozenset({"RUNNING", "UNKNOWN"})
@@ -72,15 +75,20 @@ _NEXT_ACTION = {
         "A step is queued for dispatch. Await the worker; do not treat this as "
         "completion."
     ),
+    "PARTIAL": (
+        "At least one step succeeded, but the task is not complete. Inspect the "
+        "first unfinished stage and its existing job before seeking any new "
+        "authorisation. Never replay a succeeded stage."
+    ),
 }
 
 # Only these receipt fields are surfaced. Private execution arguments, permit
 # paths, socket paths, operator identity and raw workload output are omitted.
-_MCP_EVIDENCE_KEYS = ("decision", "request_id")
+_MCP_EVIDENCE_KEYS = ("decision", "request_id", "error", "incident_id")
 _SANDBOX_EVIDENCE_KEYS = (
     "decision", "status", "exit_code", "duration_ms", "fingerprint",
     "cleanup_confirmed", "stdout_sha256", "stderr_sha256",
-    "stdout_truncated", "stderr_truncated", "error",
+    "stdout_truncated", "stderr_truncated", "error", "incident_id",
 )
 
 _BASE_UNRECOVERABLE = [
@@ -242,20 +250,61 @@ def _read_report(conn: sqlite3.Connection, row: dict, tables: set[str]) -> dict:
     return report
 
 
-def _task_report(conn: sqlite3.Connection, row: dict) -> dict:
-    steps = [
-        {"ordinal": s["ordinal"], "tool": s["tool"], "status": s["status"],
-         "job_id": s["job_id"]}
-        for s in conn.execute(
-            "SELECT ordinal,tool,status,job_id FROM harness_steps "
-            "WHERE task_id=? ORDER BY ordinal", (row["task_id"],)
-        ).fetchall()
-    ]
+def _task_report(conn: sqlite3.Connection, row: dict, tables: set[str]) -> dict:
+    """Reconcile cached harness state with child jobs without writing to either."""
+    steps: list[dict] = []
+    for s in conn.execute(
+        "SELECT ordinal,tool,status,job_id FROM harness_steps "
+        "WHERE task_id=? ORDER BY ordinal", (row["task_id"],)
+    ):
+        cached = s["status"]
+        effective = cached
+        if s["job_id"]:
+            # Match harness._refresh_locked's exact tool-to-table association.
+            # Missing, malformed or unrecognised child evidence fails closed.
+            table = "harness_read_jobs" if s["tool"] == _READ_TOOL else "jobs"
+            child = conn.execute(
+                f"SELECT status FROM {table} WHERE job_id=?", (s["job_id"],)
+            ).fetchone() if table in tables else None
+            effective = _JOB_TO_STEP.get(child["status"], "UNKNOWN") if child else "UNKNOWN"
+        steps.append({
+            "ordinal": s["ordinal"], "tool": s["tool"], "status": effective,
+            "recorded_step_state": cached, "job_id": s["job_id"],
+        })
+
+    states = [s["status"] for s in steps]
+    # Unknown/running child operations take priority over apparent terminal
+    # aggregate states. A previous success does not make an unfinished task safe.
+    if not states or "UNKNOWN" in states:
+        effective_state = "UNKNOWN"
+    elif "RUNNING" in states:
+        effective_state = "RUNNING"
+    elif "DENIED" in states:
+        effective_state = "DENIED"
+    elif "CANCELLED" in states:
+        effective_state = "CANCELLED"
+    elif all(s == "SUCCEEDED" for s in states):
+        effective_state = "SUCCEEDED"
+    elif "SUCCEEDED" in states:
+        effective_state = "PARTIAL"
+    elif "QUEUED" in states:
+        effective_state = "QUEUED"
+    else:
+        effective_state = "WAITING_PERMIT"
+
+    progress = sum(s == "SUCCEEDED" for s in states)
     report = _base_report(
-        row, category="harness_task",
+        {"status": effective_state},
+        category="harness_task",
         extra={
             "name": row.get("name"),
-            "recorded_timestamps": _timestamps(row, ("created_at_ms", "updated_at_ms")),
+            "recorded_task_state": row.get("status"),
+            "recovery_state_derived_from_steps": True,
+            "partial_progress": progress > 0 and progress < len(states),
+            "step_progress": {"succeeded": progress, "total": len(states)},
+            "recorded_timestamps": _timestamps(
+                row, ("created_at_ms", "updated_at_ms")
+            ),
             "steps": steps,
             "evidence_reference": {"steps_recorded": len(steps)},
         },
@@ -264,7 +313,6 @@ def _task_report(conn: sqlite3.Connection, row: dict) -> dict:
         "per-step model reasoning; only the durable step states are recorded"
     )
     return report
-
 
 def _matches(conn: sqlite3.Connection, job_id: str, tables: set[str]) -> list[dict]:
     found: list[dict] = []
@@ -287,7 +335,7 @@ def _matches(conn: sqlite3.Connection, job_id: str, tables: set[str]) -> list[di
             "SELECT * FROM harness_tasks WHERE task_id=?", (job_id,)
         ).fetchone()
         if row:
-            found.append(_task_report(conn, dict(row)))
+            found.append(_task_report(conn, dict(row), tables))
     return found
 
 
