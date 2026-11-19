@@ -108,6 +108,20 @@ class ReportExportTests(unittest.TestCase):
         self.assertIn("HALTED", html)
         self.assertIn("heartbeat", html)
 
+    def test_oversized_stored_text_is_clamped_in_export(self):
+        job_id = self._seed_running_job()
+        with open_db(self.db) as conn:
+            conn.execute("UPDATE jobs SET tool=? WHERE job_id=?", ("T" * 300_000, job_id))
+            conn.execute(
+                "UPDATE control SET halted=1, reason=? WHERE singleton=1",
+                ("R" * 300_000,),
+            )
+        snap = collect_snapshot(self.db, now_ms=1_700_000_000_000)
+        self.assertLessEqual(len(snap["jobs"][0]["tool"]), 512 + len("…[truncated]"))
+        self.assertLessEqual(len(snap["control"]["reason"]), 512 + len("…[truncated]"))
+        html = render_report(snap)
+        self.assertLess(len(html), 64_000)
+
     def test_outstanding_unknown_and_running_are_flagged(self):
         self._seed_running_job()
         with open_db(self.db) as conn:

@@ -113,6 +113,23 @@ def _escape(value: object) -> str:
     return html.escape(str(value), quote=True)
 
 
+# A stored column is untrusted input. One corrupt row must not inflate the
+# static export, so every free-text value is clamped before it is rendered.
+_MAX_TEXT = 512
+
+
+def _bounded(value: object, limit: int = _MAX_TEXT) -> object:
+    if isinstance(value, str):
+        if len(value) <= limit:
+            return value
+        return value[:limit] + "…[truncated]"
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, (int, float)):
+        return value
+    return None
+
+
 def _as_int(value: object) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int):
         return None
@@ -177,7 +194,7 @@ def _optional_rows(
 
 
 def _select_allowlisted(row: sqlite3.Row, columns: tuple[str, ...]) -> dict:
-    return {column: row[column] for column in columns if column in row.keys()}
+    return {column: _bounded(row[column]) for column in columns if column in row.keys()}
 
 
 def _diagnostic_category(raw: object) -> str | None:
@@ -281,7 +298,7 @@ def collect_snapshot(
         "version": __version__,
         "control": {
             "halted": bool(control.get("halted")),
-            "reason": control.get("reason") if isinstance(control.get("reason"), str) else "",
+            "reason": _bounded(control.get("reason")) if isinstance(control.get("reason"), str) else "",
             "updated_at_ms": _as_int(control.get("updated_at_ms")) or 0,
         },
         "jobs": jobs,
