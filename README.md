@@ -97,6 +97,34 @@ with `O_EXCL` so it refuses to overwrite an existing file (or a hard link to the
 database) unless `--overwrite` is given. See
 [offline operational report](docs/REPORT.md).
 
+## Read-only recovery report
+
+Resume an interrupted task from durable state without replaying anything:
+
+```bash
+shards-agent-os --db "$DB" recovery-report --job-id <32-hex-job-id>
+```
+
+This is a **read-only** receipt for one durable id (an MCP job, a sandbox job
+or a harness task). It opens the private SQLite file read-only
+(`mode=ro` + `PRAGMA query_only`), never mutates state, never retries and never
+issues a permit. The JSON report records the execution category, the durable
+state, recorded timestamps, the existing evidence reference, a completion
+verdict (`VERIFIED` / `UNRESOLVED` / `UNKNOWN` / `NOT_COMPLETED` /
+`NOT_STARTED`), whether manual reconciliation is required, the smallest safe
+next action, and what cannot be recovered. A durable `RUNNING` record is
+reported as `UNRESOLVED` — it is explicitly **not** proof that a process is
+alive — and a recorded `SUCCEEDED` never implies that external business effects
+were independently verified. A missing or malformed id returns an explicit
+`NOT_FOUND` / `UNREADABLE` result rather than an error. Private execution
+arguments, permit paths, socket paths and raw workload output are never included.
+For harness tasks the report also reconciles each step's cached state with its
+linked durable job record, without writing back to the database. It preserves
+the cached parent state separately, marks mixed completed/unreleased steps as
+`PARTIAL`, and treats missing or unknown child records as uncertain. UNKNOWN
+MCP/sandbox receipts include only bounded, operator-safe error and incident
+identifiers, not raw exception text or private workload output.
+
 
 ## Experimental Linux sandbox executor
 
