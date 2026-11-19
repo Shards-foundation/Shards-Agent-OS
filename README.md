@@ -81,6 +81,35 @@ shards-agent-os --db "$DB" inventory
 
 **The directory is not a security principal issuer.** `agent-enroll` stores operator notes only; it does not enrol an agent in Shards-Kernel's signed policy. `capability-register` never activates a driver. No CLI input is accepted as a signed permit or an authenticated external device execution.
 
+## Read-only recovery report
+
+Resume an interrupted task from durable state without replaying anything:
+
+```bash
+shards-agent-os --db "$DB" recovery-report --job-id <32-hex-job-id>
+```
+
+This is a **read-only** receipt for one durable id (an MCP job, a sandbox job
+or a harness task). It opens the private SQLite file read-only
+(`mode=ro` + `PRAGMA query_only`), never mutates state, never retries and never
+issues a permit. The JSON report records the execution category, the durable
+state, recorded timestamps, the existing evidence reference, a completion
+verdict (`VERIFIED` / `UNRESOLVED` / `UNKNOWN` / `NOT_COMPLETED` /
+`NOT_STARTED`), whether manual reconciliation is required, the smallest safe
+next action, and what cannot be recovered. A durable `RUNNING` record is
+reported as `UNRESOLVED` — it is explicitly **not** proof that a process is
+alive — and a recorded `SUCCEEDED` never implies that external business effects
+were independently verified. A missing or malformed id returns an explicit
+`NOT_FOUND` / `UNREADABLE` result rather than an error. Private execution
+arguments, permit paths, socket paths and raw workload output are never included.
+For harness tasks the report also reconciles each step's cached state with its
+linked durable job record, without writing back to the database. It preserves
+the cached parent state separately, marks mixed completed/unreleased steps as
+`PARTIAL`, and treats missing or unknown child records as uncertain. UNKNOWN
+MCP/sandbox receipts include only bounded, operator-safe error and incident
+identifiers, not raw exception text or private workload output.
+
+
 ## Experimental Linux sandbox executor
 
 A first gVisor-backed workload executor is available to **trusted local operators** through the Python module `shards_agent_os.sandbox_executor`. It launches explicitly configured, digest-pinned OCI workloads with network, filesystem, process and resource restrictions. See [sandbox executor and real Linux tests](docs/SANDBOX_EXECUTOR.md). The optional **local MCP governance adapter** can register `sandbox.exec` in a separately configured StrictKernel with public-only Ed25519 permit verifiers. A correctly signed one-use permit is required for an execution request. This is **not** a remotely authenticated or production-hardened sandbox service: host-process identity separation, durable audit/recovery, and a deployed operator remain necessary.

@@ -13,6 +13,7 @@ from .interrupts import control_state, halt, resume
 from .memory import delete, purge_expired, recall, store
 from .recurrence import (create_schedule, list_schedules, due_schedules,
                          release_occurrence, set_schedule_enabled, skip_missed)
+from .recovery_report import build_recovery_report
 from .scheduler import cancel_pending, enqueue, list_jobs, run_once, reconcile_unknown
 from .sandbox_client import _private_json
 from .sandbox_jobs import (
@@ -89,6 +90,11 @@ def main(argv: list[str] | None = None) -> int:
     sandbox_reconcile.add_argument('--incident-id', required=True)
     commands.add_parser('list', help='List jobs without displaying permit file paths')
     commands.add_parser('status', help='Summarise control and queue state')
+    recovery = commands.add_parser(
+        'recovery-report',
+        help='Read-only recovery receipt for one durable job id; never retries or mutates state',
+    )
+    recovery.add_argument('--job-id', required=True)
     cancel = commands.add_parser('cancel', help='Cancel pending only')
     cancel.add_argument('job_id')
     emergency = commands.add_parser('halt', help='Block new claims, not already running work')
@@ -198,6 +204,8 @@ def main(argv: list[str] | None = None) -> int:
                       'jobs': {r['status']:r['count'] for r in rows},
                       'sandbox_jobs': {r['status']:r['count'] for r in sandboxes},
                       'memory_records':mem}
+        elif args.command == 'recovery-report':
+            result = build_recovery_report(args.db, args.job_id)
         elif args.command == 'cancel':
             changed = cancel_pending(args.db,args.job_id)
             result = {'job_id':args.job_id,'status':'CANCELLED' if changed else 'NOT_CANCELLED'}
