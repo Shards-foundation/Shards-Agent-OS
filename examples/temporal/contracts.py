@@ -36,6 +36,8 @@ def sanitise_governed_report(report: dict[str, Any], repository: str) -> dict[st
     """Keep tokens, logs and arbitrary GitHub text out of Temporal Event History."""
     if not isinstance(report, dict):
         raise ValueError("Invalid report")
+    if report.get("status") not in _STATUSES:
+        raise ValueError("Unrecognised report status")
     if report.get("repository") != repository or report.get("status") != "completed":
         raise ValueError("Unverified or mismatched report")
     if report.get("decision") != "ALLOW":
@@ -50,6 +52,9 @@ def sanitise_governed_report(report: dict[str, Any], repository: str) -> dict[st
     for item in failures:
         if not isinstance(item, dict) or type(item.get("id")) is not int or item["id"] < 0:
             raise ValueError("Invalid run identifier")
+        conclusion = item.get("conclusion")
+        if conclusion is not None and conclusion not in _CONCLUSIONS:
+            raise ValueError("Unrecognised run conclusion")
         clean.append({
             "id": item["id"],
             "url": f"https://github.com/{repository}/actions/runs/{item['id']}",

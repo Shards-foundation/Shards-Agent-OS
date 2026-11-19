@@ -65,6 +65,17 @@ class ContractTests(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 validate_repository(invalid)
 
+    def test_status_and_conclusion_vocabularies_are_enforced(self):
+        record = sample()
+        record["status"] = "totally-unknown"
+        with self.assertRaises(ValueError):
+            sanitise_governed_report(record, record["repository"])
+
+        record = sample()
+        record["failures"] = [{"id": 1, "conclusion": "exfiltrated"}]
+        with self.assertRaises(ValueError):
+            sanitise_governed_report(record, record["repository"])
+
     def test_runner_does_not_compare_repository_to_itself(self):
         import ast
         from pathlib import Path
