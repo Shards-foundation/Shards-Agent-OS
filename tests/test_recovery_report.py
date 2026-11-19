@@ -220,6 +220,55 @@ class RecoveryReportTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             build_recovery_report(self.db, job_id)
 
+    def _corrupt(self, sql: str, params: tuple) -> None:
+        with closing(sqlite3.connect(self.db)) as conn, conn:
+            conn.execute(sql, params)
+
+    def test_unrepresentable_timestamp_fails_safe(self):
+        job_id = self.add()
+        self._corrupt(
+            "UPDATE jobs SET status='SUCCEEDED', finished_at_ms=? WHERE job_id=?",
+            (2 ** 62, job_id),
+        )
+        report = build_recovery_report(self.db, job_id)
+        stamp = report["recorded_timestamps"]["finished_at_ms"]
+        self.assertEqual(stamp["ms"], 2 ** 62)
+        self.assertIsNone(stamp["utc"])
+        self.assertFalse(stamp["utc_representable"])
+
+        self._corrupt(
+            "UPDATE jobs SET finished_at_ms=? WHERE job_id=?", (-(2 ** 62), job_id)
+        )
+        negative = build_recovery_report(self.db, job_id)
+        self.assertIsNone(negative["recorded_timestamps"]["finished_at_ms"]["utc"])
+
+    def test_oversized_receipt_is_reported_not_exported(self):
+        job_id = self.add()
+        self._corrupt(
+            "UPDATE jobs SET status='UNKNOWN', result_json=? WHERE job_id=?",
+            (json.dumps({"error": "A" * 500_000}), job_id),
+        )
+        report = build_recovery_report(self.db, job_id)
+        self.assertEqual(report["evidence_reference"], {"receipt": "oversized"})
+        self.assertLess(len(json.dumps(report)), 8_192)
+
+    def test_bounded_evidence_text_keeps_incident_id(self):
+        job_id = self.add()
+        self._corrupt(
+            "UPDATE jobs SET status='UNKNOWN', result_json=? WHERE job_id=?",
+            (json.dumps({"error": "B" * 5_000, "incident_id": "INC-9"}), job_id),
+        )
+        evidence = build_recovery_report(self.db, job_id)["evidence_reference"]
+        self.assertLessEqual(len(evidence["error"]), 512 + len("…[truncated]"))
+        self.assertTrue(evidence["error"].endswith("…[truncated]"))
+        self.assertEqual(evidence["incident_id"], "INC-9")
+
+    def test_oversized_identifiers_are_bounded(self):
+        job_id = self.add()
+        self._corrupt("UPDATE jobs SET tool=? WHERE job_id=?", ("X" * 100_000, job_id))
+        report = build_recovery_report(self.db, job_id)
+        self.assertLessEqual(len(report["tool"]), 64 + len("…[truncated]"))
+
     def test_harness_task_reports_step_states(self):
         from shards_agent_os.harness import create_task
 

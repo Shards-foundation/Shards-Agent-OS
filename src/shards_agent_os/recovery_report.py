@@ -91,6 +91,11 @@ _SANDBOX_EVIDENCE_KEYS = (
     "stdout_truncated", "stderr_truncated", "error", "incident_id",
 )
 
+# A stored receipt and its text fields are untrusted input: one corrupt or
+# hostile row must not produce an unbounded receipt or a huge allocation.
+_MAX_RECEIPT_BYTES = 262_144
+_MAX_EVIDENCE_TEXT = 512
+
 _BASE_UNRECOVERABLE = [
     "in-memory process state of the worker that attempted the job",
     "whether an external business effect completed, unless recorded below",
@@ -99,16 +104,28 @@ _BASE_UNRECOVERABLE = [
 ]
 
 
-def _iso(ms: int) -> str:
-    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+# A stored timestamp is untrusted input. datetime.fromtimestamp raises
+# OverflowError or ValueError for values outside the platform range, so a
+# corrupt row must degrade to an explicit unrepresentable marker rather than
+# abort the whole receipt.
+def _iso(ms: int) -> str | None:
+    try:
+        return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%S.%fZ"
+        )
+    except (OverflowError, ValueError, OSError):
+        return None
 
 
 def _timestamps(row: dict, keys: tuple[str, ...]) -> dict:
     recorded: dict = {}
     for key in keys:
         value = row.get(key)
-        if isinstance(value, int):
-            recorded[key] = {"ms": value, "utc": _iso(value)}
+        if isinstance(value, int) and not isinstance(value, bool):
+            utc = _iso(value)
+            recorded[key] = {"ms": value, "utc": utc} if utc else {
+                "ms": value, "utc": None, "utc_representable": False,
+            }
     return recorded
 
 
@@ -159,16 +176,33 @@ def _tables(conn: sqlite3.Connection) -> set[str]:
     )}
 
 
+def _bounded(value: object, limit: int = _MAX_EVIDENCE_TEXT) -> object:
+    """Clamp a stored scalar so one corrupt row cannot inflate the receipt."""
+    if isinstance(value, str):
+        if len(value) <= limit:
+            return value
+        return value[:limit] + "…[truncated]"
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, (int, float)):
+        return value
+    return None
+
+
 def _evidence(raw: str | None, allowed: tuple[str, ...]) -> dict:
     if not raw:
         return {"receipt": "none"}
+    if not isinstance(raw, str) or len(raw) > _MAX_RECEIPT_BYTES:
+        return {"receipt": "oversized"}
     try:
         parsed = json.loads(raw)
     except (ValueError, TypeError):
         return {"receipt": "unreadable"}
     if not isinstance(parsed, dict):
         return {"receipt": "unreadable"}
-    evidence = {key: parsed[key] for key in allowed if key in parsed}
+    evidence = {
+        key: _bounded(parsed[key]) for key in allowed if key in parsed
+    }
     if "result" in parsed:
         evidence["result_recorded"] = True
     return evidence or {"receipt": "none"}
@@ -196,7 +230,7 @@ def _mcp_report(row: dict) -> dict:
     return _base_report(
         row, category="mcp_tool_job",
         extra={
-            "tool": row.get("tool"),
+            "tool": _bounded(row.get("tool"), 64),
             "recorded_timestamps": _timestamps(
                 row, ("created_at_ms", "started_at_ms", "finished_at_ms", "run_at_ms")
             ),
@@ -231,14 +265,14 @@ def _read_report(conn: sqlite3.Connection, row: dict, tables: set[str]) -> dict:
     report = _base_report(
         row, category="harness_read_job",
         extra={
-            "task_id": row.get("task_id"),
+            "task_id": _bounded(row.get("task_id"), 64),
             "ordinal": row.get("ordinal"),
-            "repository": row.get("repository"),
+            "repository": _bounded(row.get("repository"), 201),
             "recorded_timestamps": _timestamps(
                 row, ("created_at_ms", "started_at_ms", "finished_at_ms")
             ),
             "evidence_reference": {
-                "evidence_root_hash": row.get("root_hash"),
+                "evidence_root_hash": _bounded(row.get("root_hash"), 128),
                 "report_recorded": row.get("report_json") is not None,
                 "incident_id": incident_id,
             },
@@ -268,8 +302,9 @@ def _task_report(conn: sqlite3.Connection, row: dict, tables: set[str]) -> dict:
             ).fetchone() if table in tables else None
             effective = _JOB_TO_STEP.get(child["status"], "UNKNOWN") if child else "UNKNOWN"
         steps.append({
-            "ordinal": s["ordinal"], "tool": s["tool"], "status": effective,
-            "recorded_step_state": cached, "job_id": s["job_id"],
+            "ordinal": s["ordinal"], "tool": _bounded(s["tool"], 64),
+            "status": effective, "recorded_step_state": cached,
+            "job_id": s["job_id"],
         })
 
     states = [s["status"] for s in steps]
@@ -297,7 +332,7 @@ def _task_report(conn: sqlite3.Connection, row: dict, tables: set[str]) -> dict:
         {"status": effective_state},
         category="harness_task",
         extra={
-            "name": row.get("name"),
+            "name": _bounded(row.get("name"), 160),
             "recorded_task_state": row.get("status"),
             "recovery_state_derived_from_steps": True,
             "partial_progress": progress > 0 and progress < len(states),
@@ -313,6 +348,7 @@ def _task_report(conn: sqlite3.Connection, row: dict, tables: set[str]) -> dict:
         "per-step model reasoning; only the durable step states are recorded"
     )
     return report
+
 
 def _matches(conn: sqlite3.Connection, job_id: str, tables: set[str]) -> list[dict]:
     found: list[dict] = []
