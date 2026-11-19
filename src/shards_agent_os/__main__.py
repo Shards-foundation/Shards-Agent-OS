@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import sys
 import time
 
@@ -13,6 +14,8 @@ from .interrupts import control_state, halt, resume
 from .memory import delete, purge_expired, recall, store
 from .recurrence import (create_schedule, list_schedules, due_schedules,
                          release_occurrence, set_schedule_enabled, skip_missed)
+from .recovery_report import build_recovery_report
+from .report import export_report
 from .scheduler import cancel_pending, enqueue, list_jobs, run_once, reconcile_unknown
 from .sandbox_client import _private_json
 from .sandbox_jobs import (
@@ -89,6 +92,11 @@ def main(argv: list[str] | None = None) -> int:
     sandbox_reconcile.add_argument('--incident-id', required=True)
     commands.add_parser('list', help='List jobs without displaying permit file paths')
     commands.add_parser('status', help='Summarise control and queue state')
+    recovery = commands.add_parser(
+        'recovery-report',
+        help='Read-only recovery receipt for one durable job id; never retries or mutates state',
+    )
+    recovery.add_argument('--job-id', required=True)
     cancel = commands.add_parser('cancel', help='Cancel pending only')
     cancel.add_argument('job_id')
     emergency = commands.add_parser('halt', help='Block new claims, not already running work')
@@ -119,6 +127,12 @@ def main(argv: list[str] | None = None) -> int:
     cap.add_argument('--description', default='')
     cap.add_argument('--tools', default='', help='Comma-separated echo/add subset')
     commands.add_parser('inventory', help='Read local inventories')
+    export = commands.add_parser(
+        'export-report', help='Write a read-only, offline HTML operational snapshot',
+    )
+    export.add_argument('--output', required=True, help='Absolute path of the HTML report to write')
+    export.add_argument('--overwrite', action='store_true',
+                        help='Atomically replace an existing report file')
     schedule = commands.add_parser('schedule-add', help='Register an inert interval template, no permit')
     schedule.add_argument('--name', required=True)
     schedule.add_argument('--every-ms', type=int, required=True)
@@ -198,6 +212,8 @@ def main(argv: list[str] | None = None) -> int:
                       'jobs': {r['status']:r['count'] for r in rows},
                       'sandbox_jobs': {r['status']:r['count'] for r in sandboxes},
                       'memory_records':mem}
+        elif args.command == 'recovery-report':
+            result = build_recovery_report(args.db, args.job_id)
         elif args.command == 'cancel':
             changed = cancel_pending(args.db,args.job_id)
             result = {'job_id':args.job_id,'status':'CANCELLED' if changed else 'NOT_CANCELLED'}
@@ -247,9 +263,12 @@ def main(argv: list[str] | None = None) -> int:
             result = {'schedule_id':args.schedule_id,
                       'changed': set_schedule_enabled(args.db,args.schedule_id,enabled),
                       'enabled':enabled}
+        elif args.command == 'export-report':
+            result = export_report(args.db, args.output, overwrite=args.overwrite)
         else:
             result = inventory(args.db)
-    except (ValueError, OSError, OverflowError, TypeError, json.JSONDecodeError):
+    except (ValueError, OSError, OverflowError, TypeError,
+            json.JSONDecodeError, sqlite3.Error):
         print(json.dumps({'status':'ERROR','error':'Invalid input or local state'}))
         return 2
     print(json.dumps(result,sort_keys=True,separators=(',',':'),allow_nan=False))

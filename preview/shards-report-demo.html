@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="no-referrer">
+<title>Shards Agent OS — Operational Snapshot</title>
+<style>
+:root{
+  --bg:#eef1f5; --panel:#ffffff; --panel-2:#f5f7fa; --text:#0f141a;
+  --muted:#5a6674; --border:#d7dde5; --accent:#2563eb; --accent-weak:#e3ecff;
+  --ok:#15803d; --ok-weak:#dcfce7; --warn:#a15c07; --warn-weak:#fef3c7;
+  --danger:#b91c1c; --danger-weak:#fee2e2; --unknown:#6d28d9; --unknown-weak:#ede9fe;
+  --shadow:0 1px 2px rgba(15,20,26,.08),0 2px 8px rgba(15,20,26,.06);
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#0a0e13; --panel:#121922; --panel-2:#0f151d; --text:#e9eef4;
+    --muted:#9aa7b5; --border:#243141; --accent:#6aa4ff; --accent-weak:#16243d;
+    --ok:#4ade80; --ok-weak:#10291b; --warn:#f5c451; --warn-weak:#2c2310;
+    --danger:#f87171; --danger-weak:#2e1416; --unknown:#c4b5fd; --unknown-weak:#241a44;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 2px 10px rgba(0,0,0,.35);
+  }
+}
+html[data-theme="light"]{
+  --bg:#eef1f5; --panel:#ffffff; --panel-2:#f5f7fa; --text:#0f141a;
+  --muted:#5a6674; --border:#d7dde5; --accent:#2563eb; --accent-weak:#e3ecff;
+  --ok:#15803d; --ok-weak:#dcfce7; --warn:#a15c07; --warn-weak:#fef3c7;
+  --danger:#b91c1c; --danger-weak:#fee2e2; --unknown:#6d28d9; --unknown-weak:#ede9fe;
+  --shadow:0 1px 2px rgba(15,20,26,.08),0 2px 8px rgba(15,20,26,.06);
+}
+html[data-theme="dark"]{
+  --bg:#0a0e13; --panel:#121922; --panel-2:#0f151d; --text:#e9eef4;
+  --muted:#9aa7b5; --border:#243141; --accent:#6aa4ff; --accent-weak:#16243d;
+  --ok:#4ade80; --ok-weak:#10291b; --warn:#f5c451; --warn-weak:#2c2310;
+  --danger:#f87171; --danger-weak:#2e1416; --unknown:#c4b5fd; --unknown-weak:#241a44;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 2px 10px rgba(0,0,0,.35);
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;background:var(--bg);color:var(--text);
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,Ubuntu,Cantarell,"Helvetica Neue",Arial,sans-serif;
+  font-size:16px;line-height:1.5;
+  padding:0 0 env(safe-area-inset-bottom,0);
+}
+.topbar{
+  position:sticky;top:0;z-index:10;display:flex;align-items:center;justify-content:space-between;
+  gap:12px;padding:12px 16px;padding-top:calc(12px + env(safe-area-inset-top,0));
+  background:var(--panel);border-bottom:1px solid var(--border);box-shadow:var(--shadow);
+}
+.brand{display:flex;flex-direction:column;min-width:0}
+.brand b{font-size:1rem;letter-spacing:.01em}
+.brand span{font-size:.72rem;color:var(--muted)}
+button{
+  font:inherit;font-size:.85rem;color:var(--text);background:var(--panel-2);
+  border:1px solid var(--border);border-radius:10px;padding:10px 14px;cursor:pointer;
+  min-height:44px;
+}
+button:active{transform:translateY(1px)}
+main{max-width:960px;margin:0 auto;padding:16px;display:flex;flex-direction:column;gap:16px}
+.card{
+  background:var(--panel);border:1px solid var(--border);border-radius:14px;
+  padding:16px;box-shadow:var(--shadow);
+}
+.card h2{margin:0 0 12px;font-size:1rem;letter-spacing:.01em}
+.card h2 small{display:block;font-size:.72rem;font-weight:400;color:var(--muted);margin-top:2px}
+.notice{
+  border-radius:12px;padding:12px 14px;border:1px solid var(--border);
+  background:var(--panel-2);font-size:.85rem;
+}
+.notice strong{display:block;margin-bottom:2px}
+.notice.info{border-color:var(--accent);background:var(--accent-weak)}
+.notice.warn{border-color:var(--warn);background:var(--warn-weak)}
+.notice.danger{border-color:var(--danger);background:var(--danger-weak)}
+.notice.ok{border-color:var(--ok);background:var(--ok-weak)}
+.stack{display:flex;flex-direction:column;gap:10px}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+@media (min-width:560px){.grid{grid-template-columns:repeat(4,minmax(0,1fr))}}
+.stat{
+  background:var(--panel-2);border:1px solid var(--border);border-radius:12px;padding:12px;
+}
+.stat .n{font-size:1.5rem;font-weight:700;line-height:1.1}
+.stat .l{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-top:4px}
+.kv{display:flex;flex-wrap:wrap;gap:8px 20px;font-size:.85rem}
+.kv div{min-width:160px}
+.kv .k{display:block;color:var(--muted);font-size:.72rem;text-transform:uppercase;letter-spacing:.06em}
+.table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:10px;border:1px solid var(--border)}
+table{border-collapse:collapse;width:100%;font-size:.82rem}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
+th{background:var(--panel-2);color:var(--muted);font-weight:600;font-size:.72rem;
+  text-transform:uppercase;letter-spacing:.05em;position:sticky;top:0}
+tbody tr:last-child td{border-bottom:none}
+tr.danger td{background:var(--danger-weak)}
+tr.warn td{background:var(--warn-weak)}
+.pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:.72rem;font-weight:600;
+  border:1px solid transparent;white-space:nowrap}
+.p-ok{background:var(--ok-weak);color:var(--ok)}
+.p-warn{background:var(--warn-weak);color:var(--warn)}
+.p-danger{background:var(--danger-weak);color:var(--danger)}
+.p-unknown{background:var(--unknown-weak);color:var(--unknown)}
+.p-neutral{background:var(--panel-2);color:var(--muted);border-color:var(--border)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;font-size:.78rem}
+.empty{color:var(--muted);font-size:.85rem;padding:6px 2px}
+footer{color:var(--muted);font-size:.75rem;text-align:center;padding:4px 8px 24px;line-height:1.6}
+footer .mono{font-size:.72rem}
+</style>
+<script>
+(function(){
+  try{
+    var s=localStorage.getItem('shards-report-theme');
+    if(s==='dark'||s==='light'){document.documentElement.setAttribute('data-theme',s);}
+  }catch(e){}
+})();
+</script>
+</head>
+<body>
+<header class="topbar"><div class="brand"><b>Shards Agent OS</b><span>Operational snapshot · 2023-11-14 22:13:20 UTC</span></div><button id="theme-toggle" type="button" aria-label="Toggle colour theme">Theme</button></header>
+<main>
+  <section class="stack" aria-label="Notices"><div class="notice info"><strong>Point-in-time snapshot</strong>Generated 2023-11-14 22:13:20 UTC. This file is a static export, not a live monitoring service. Re-run <span class="mono">export-report</span> for current state.</div><div class="notice danger"><strong>Dispatch is HALTED</strong>New job claims are blocked. In-flight external work is not preempted by halt.<span class="mono"> Reason: operator maintenance window</span></div><div class="notice warn"><strong>Operator reconciliation required</strong>2 job(s) are RUNNING or UNKNOWN. These are never retried automatically; verify external effects before resuming.</div></section>
+
+  <section class="card" aria-label="Halt state">
+    <h2>Dispatch control<small>Local halt latch governs new claims only</small></h2>
+    <div class="kv"><div><span class="k">Latch</span><span class="pill p-danger">HALTED</span></div><div><span class="k">Reason</span>operator maintenance window</div><div><span class="k">Updated</span>2026-11-17 21:31:52 UTC</div></div>
+  </section>
+
+  <section class="card" aria-label="Job summary">
+    <h2>MCP job summary<small>Governed echo/add queue</small></h2>
+    <div class="grid"><div class="stat"><div class="n">1</div><div class="l">RUNNING</div></div><div class="stat"><div class="n">0</div><div class="l">UNKNOWN</div></div><div class="stat"><div class="n">1</div><div class="l">PENDING</div></div><div class="stat"><div class="n">1</div><div class="l">SUCCEEDED</div></div><div class="stat"><div class="n">1</div><div class="l">DENIED</div></div><div class="stat"><div class="n">0</div><div class="l">CANCELLED</div></div></div>
+  </section>
+
+  <section class="card" aria-label="Outstanding jobs">
+    <h2>Outstanding jobs<small>RUNNING and UNKNOWN require reconciliation</small></h2>
+    <div class="table-wrap"><table><thead><tr><th>Job ID</th><th>Status</th><th>Tool</th><th>Due</th><th>Started</th><th>Finished</th></tr></thead><tbody><tr class="warn"><td class="mono">cccccccccccccccccccccccccccccccc</td><td><span class="pill p-warn">RUNNING</span></td><td>echo</td><td>1970-01-01 00:00:00 UTC</td><td>1970-01-01 00:00:00 UTC</td><td>—</td></tr><tr class="danger"><td class="mono">ffffffffffffffffffffffffffffffff</td><td><span class="pill p-unknown">UNKNOWN</span></td><td>sandbox</td><td>1970-01-01 00:00:00 UTC</td><td>1970-01-01 00:00:00 UTC</td><td>—</td></tr></tbody></table></div>
+  </section>
+
+  <section class="card" aria-label="All jobs">
+    <h2>All MCP jobs<small>Arguments and permit paths are withheld</small></h2>
+    <div class="table-wrap"><table><thead><tr><th>Job ID</th><th>Status</th><th>Tool</th><th>Due</th><th>Started</th><th>Finished</th></tr></thead><tbody><tr><td class="mono">c7f5864ba0f1437c8b0eb30cd76120ae</td><td><span class="pill p-ok">SUCCEEDED</span></td><td>echo</td><td>—</td><td>1970-01-01 00:00:00 UTC</td><td>2026-11-17 21:31:52 UTC</td></tr><tr><td class="mono">aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa</td><td><span class="pill p-danger">DENIED</span></td><td>add</td><td>1970-01-01 00:00:00 UTC</td><td>—</td><td>1970-01-01 00:00:00 UTC</td></tr><tr class="warn"><td class="mono">cccccccccccccccccccccccccccccccc</td><td><span class="pill p-warn">RUNNING</span></td><td>echo</td><td>1970-01-01 00:00:00 UTC</td><td>1970-01-01 00:00:00 UTC</td><td>—</td></tr><tr><td class="mono">bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb</td><td><span class="pill p-neutral">PENDING</span></td><td>echo</td><td>2286-11-20 17:46:40 UTC</td><td>—</td><td>—</td></tr></tbody></table></div>
+  </section>
+
+  <section class="card" aria-label="Sandbox summary">
+    <h2>Sandbox job summary<small>Isolated execution queue</small></h2>
+    <div class="grid"><div class="stat"><div class="n">0</div><div class="l">RUNNING</div></div><div class="stat"><div class="n">1</div><div class="l">UNKNOWN</div></div><div class="stat"><div class="n">0</div><div class="l">PENDING</div></div><div class="stat"><div class="n">1</div><div class="l">SUCCEEDED</div></div><div class="stat"><div class="n">1</div><div class="l">FAILED</div></div><div class="stat"><div class="n">0</div><div class="l">DENIED</div></div><div class="stat"><div class="n">0</div><div class="l">CANCELLED</div></div></div>
+    <div style="margin-top:12px"><div class="kv"><div><span class="k">Sandbox jobs</span>3</div><div><span class="k">Outstanding</span>1</div></div></div>
+    <div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>Job ID</th><th>Status</th><th>Decision</th><th>Exit</th><th>Duration</th><th>Diagnostic</th></tr></thead><tbody><tr><td class="mono">dddddddddddddddddddddddddddddddd</td><td><span class="pill p-ok">SUCCEEDED</span></td><td>ALLOW</td><td>0</td><td>1s</td><td class="mono">—</td></tr><tr><td class="mono">eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee</td><td><span class="pill p-danger">FAILED</span></td><td>ALLOW</td><td>126</td><td>—</td><td class="mono">PERMISSION_DENIED</td></tr></tbody></table></div>
+  </section>
+
+  <section class="card" aria-label="Sandbox jobs">
+    <h2>All sandbox jobs<small>Workload arguments and output withheld</small></h2>
+    <div class="table-wrap"><table><thead><tr><th>Job ID</th><th>Status</th><th>Kind</th><th>Due</th><th>Started</th><th>Finished</th></tr></thead><tbody><tr><td class="mono">dddddddddddddddddddddddddddddddd</td><td><span class="pill p-ok">SUCCEEDED</span></td><td>sandbox</td><td>1970-01-01 00:00:00 UTC</td><td>1970-01-01 00:00:00 UTC</td><td>1970-01-01 00:00:00 UTC</td></tr><tr><td class="mono">eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee</td><td><span class="pill p-danger">FAILED</span></td><td>sandbox</td><td>1970-01-01 00:00:00 UTC</td><td>1970-01-01 00:00:00 UTC</td><td>—</td></tr><tr class="danger"><td class="mono">ffffffffffffffffffffffffffffffff</td><td><span class="pill p-unknown">UNKNOWN</span></td><td>sandbox</td><td>1970-01-01 00:00:00 UTC</td><td>1970-01-01 00:00:00 UTC</td><td>—</td></tr></tbody></table></div>
+  </section>
+
+  <section class="card" aria-label="Schedules">
+    <h2>Scheduling<small>Inert templates; each occurrence needs a fresh permit</small></h2>
+    <div style="margin-bottom:12px"><div class="kv"><div><span class="k">Templates</span>2</div><div><span class="k">Enabled</span>2</div></div></div>
+    <div class="table-wrap"><table><thead><tr><th>Name</th><th>Tool</th><th>Interval</th><th>Next Due</th><th>State</th><th>Skipped</th></tr></thead><tbody><tr><td>heartbeat</td><td>echo</td><td>every 1m 0s</td><td>1970-01-01 00:00:01 UTC</td><td><span class="pill p-ok">enabled</span></td><td>0</td></tr><tr><td>nightly-report</td><td>echo</td><td>every 1d 0h</td><td>1970-01-01 00:00:01 UTC</td><td><span class="pill p-ok">enabled</span></td><td>0</td></tr></tbody></table></div>
+  </section>
+</main>
+<footer>
+  <div>Shards Agent OS <span class="mono">0.3.0</span> — read-only operational snapshot</div>
+  <div>Permit paths, workload arguments, credentials and raw output are never exported.</div>
+  <div class="mono">generated 2023-11-14 22:13:20 UTC</div>
+</footer>
+<script>
+(function(){
+  function wire(){
+    var root=document.documentElement,key='shards-report-theme';
+    var b=document.getElementById('theme-toggle');
+    if(!b){return;}
+    b.addEventListener('click',function(){
+      var cur=root.getAttribute('data-theme');
+      if(cur!=='dark'&&cur!=='light'){
+        cur=(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';
+      }
+      var next=cur==='dark'?'light':'dark';
+      root.setAttribute('data-theme',next);
+      try{localStorage.setItem(key,next);}catch(e){}
+    });
+  }
+  if(document.readyState==='loading'){
+    document.addEventListener('DOMContentLoaded',wire);
+  }else{
+    wire();
+  }
+})();
+</script>
+</body>
+</html>
