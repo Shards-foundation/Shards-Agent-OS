@@ -95,6 +95,7 @@ _SANDBOX_EVIDENCE_KEYS = (
 # hostile row must not produce an unbounded receipt or a huge allocation.
 _MAX_RECEIPT_BYTES = 262_144
 _MAX_EVIDENCE_TEXT = 512
+_MAX_STEPS = 64
 
 _BASE_UNRECOVERABLE = [
     "in-memory process state of the worker that attempted the job",
@@ -213,7 +214,7 @@ def _base_report(row: dict, *, category: str, extra: dict | None = None) -> dict
     completion, reconcile = _verdict(state)
     report = {
         "execution_category": category,
-        "durable_state": state,
+        "durable_state": _bounded(state, 32),
         "completion": completion,
         "manual_reconciliation_required": reconcile,
         "smallest_safe_next_action": _NEXT_ACTION.get(
@@ -287,6 +288,8 @@ def _read_report(conn: sqlite3.Connection, row: dict, tables: set[str]) -> dict:
 def _task_report(conn: sqlite3.Connection, row: dict, tables: set[str]) -> dict:
     """Reconcile cached harness state with child jobs without writing to either."""
     steps: list[dict] = []
+    states: list[str] = []
+    omitted = 0
     for s in conn.execute(
         "SELECT ordinal,tool,status,job_id FROM harness_steps "
         "WHERE task_id=? ORDER BY ordinal", (row["task_id"],)
@@ -301,13 +304,19 @@ def _task_report(conn: sqlite3.Connection, row: dict, tables: set[str]) -> dict:
                 f"SELECT status FROM {table} WHERE job_id=?", (s["job_id"],)
             ).fetchone() if table in tables else None
             effective = _JOB_TO_STEP.get(child["status"], "UNKNOWN") if child else "UNKNOWN"
+        # The verdict must consider every stored step, even those not emitted,
+        # so a hostile row count cannot hide an UNKNOWN step behind the cap.
+        states.append(effective)
+        if len(steps) >= _MAX_STEPS:
+            omitted += 1
+            continue
         steps.append({
             "ordinal": s["ordinal"], "tool": _bounded(s["tool"], 64),
-            "status": effective, "recorded_step_state": cached,
-            "job_id": s["job_id"],
+            "status": _bounded(effective, 32),
+            "recorded_step_state": _bounded(cached, 32),
+            "job_id": _bounded(s["job_id"], 64),
         })
 
-    states = [s["status"] for s in steps]
     # Unknown/running child operations take priority over apparent terminal
     # aggregate states. A previous success does not make an unfinished task safe.
     if not states or "UNKNOWN" in states:
@@ -333,7 +342,7 @@ def _task_report(conn: sqlite3.Connection, row: dict, tables: set[str]) -> dict:
         category="harness_task",
         extra={
             "name": _bounded(row.get("name"), 160),
-            "recorded_task_state": row.get("status"),
+            "recorded_task_state": _bounded(row.get("status"), 32),
             "recovery_state_derived_from_steps": True,
             "partial_progress": progress > 0 and progress < len(states),
             "step_progress": {"succeeded": progress, "total": len(states)},
@@ -341,7 +350,10 @@ def _task_report(conn: sqlite3.Connection, row: dict, tables: set[str]) -> dict:
                 row, ("created_at_ms", "updated_at_ms")
             ),
             "steps": steps,
-            "evidence_reference": {"steps_recorded": len(steps)},
+            "evidence_reference": {
+                "steps_recorded": len(states),
+                "steps_omitted": omitted,
+            },
         },
     )
     report["unrecoverable"].append(

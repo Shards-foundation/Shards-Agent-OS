@@ -269,6 +269,36 @@ class RecoveryReportTests(unittest.TestCase):
         report = build_recovery_report(self.db, job_id)
         self.assertLessEqual(len(report["tool"]), 64 + len("…[truncated]"))
 
+    def test_oversized_status_is_bounded(self):
+        job_id = self.add()
+        self._corrupt(
+            "UPDATE jobs SET status=? WHERE job_id=?", ("S" * 100_000, job_id)
+        )
+        report = build_recovery_report(self.db, job_id)
+        self.assertLessEqual(len(report["durable_state"]), 32 + len("…[truncated]"))
+        self.assertEqual(report["completion"], "UNKNOWN")
+        self.assertLess(len(json.dumps(report)), 8_192)
+
+    def test_step_list_is_capped_and_reports_omissions(self):
+        from shards_agent_os.harness import create_task
+        from shards_agent_os.recovery_report import _MAX_STEPS
+
+        task_id = create_task(self.db, name="many steps", steps=[
+            {"tool": "echo", "port": 8765, "arguments": {"text": "0"}},
+        ])
+        extra = _MAX_STEPS + 6
+        with closing(sqlite3.connect(self.db)) as conn, conn:
+            conn.executemany(
+                "INSERT INTO harness_steps (task_id,ordinal,tool,port,"
+                "arguments_json,status) VALUES (?,?,?,?,?,'WAITING_PERMIT')",
+                [(task_id, i, "echo", 8765, '{"text":"x"}') for i in range(1, extra)],
+            )
+        report = build_recovery_report(self.db, task_id)
+        self.assertEqual(len(report["steps"]), _MAX_STEPS)
+        self.assertEqual(report["evidence_reference"]["steps_recorded"], extra)
+        self.assertEqual(report["evidence_reference"]["steps_omitted"], extra - _MAX_STEPS)
+        self.assertLess(len(json.dumps(report)), 65_536)
+
     def test_harness_task_reports_step_states(self):
         from shards_agent_os.harness import create_task
 
