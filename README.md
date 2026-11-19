@@ -81,6 +81,22 @@ shards-agent-os --db "$DB" inventory
 
 **The directory is not a security principal issuer.** `agent-enroll` stores operator notes only; it does not enrol an agent in Shards-Kernel's signed policy. `capability-register` never activates a driver. No CLI input is accepted as a signed permit or an authenticated external device execution.
 
+## Offline operational report
+
+Export a self-contained, mobile-first HTML snapshot of local state for review on
+an Android phone — no CDN, no external scripts, no live service:
+
+```bash
+shards-agent-os --db "$DB" export-report --output "$HOME/shards-report.html"
+```
+
+The report opens the database read-only (`mode=ro`, `PRAGMA query_only`) and
+strictly allowlists fields: it never exports permit paths, workload arguments,
+credentials or raw output, and escapes all display values. The output is created
+with `O_EXCL` so it refuses to overwrite an existing file (or a hard link to the
+database) unless `--overwrite` is given. See
+[offline operational report](docs/REPORT.md).
+
 ## Read-only recovery report
 
 Resume an interrupted task from durable state without replaying anything:
