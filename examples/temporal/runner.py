@@ -14,7 +14,7 @@ from temporalio.client import (
 from temporalio.worker import Worker
 
 from activities import governed_github_readonly
-from contracts import require_exact_repository
+from contracts import validate_repository
 from workflows import GovernedReadOnlyGitHubWorkflow
 
 QUEUE = "shards-governed-readonly"
@@ -33,7 +33,10 @@ async def main() -> None:
     if address not in {"127.0.0.1:7233", "localhost:7233"}:
         parser.error("This experimental pilot only accepts a local Temporal development server")
     repository = os.environ.get("SHARDS_TEMPORAL_REPOSITORY", "")
-    require_exact_repository(repository, repository)
+    # The operator names the one repository here; the Activity still enforces
+    # that the workflow argument matches this same env value, so this driver
+    # only has to reject a malformed name, not duplicate the allowlist check.
+    validate_repository(repository)
     client = await Client.connect(address)
     if args.command == "worker":
         worker = Worker(

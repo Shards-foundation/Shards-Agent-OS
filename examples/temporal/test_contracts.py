@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import unittest
 
-from contracts import require_exact_repository, sanitise_governed_report
+from contracts import require_exact_repository, sanitise_governed_report, validate_repository
 
 
 def sample():
@@ -56,6 +56,26 @@ class ContractTests(unittest.TestCase):
         record["failures"] = []
         result = sanitise_governed_report(record, record["repository"])
         self.assertFalse(result["requires_human_review"])
+
+    def test_validate_repository_grants_no_allowlist_authority(self):
+        # A well-formed but unconfigured repository passes shape validation;
+        # only require_exact_repository may reject it.
+        self.assertEqual(validate_repository("other/repo"), "other/repo")
+        for invalid in ("../repo", ".hidden/repo", "owner/repo/extra", "", "owner"):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                validate_repository(invalid)
+
+    def test_runner_does_not_compare_repository_to_itself(self):
+        import ast
+        from pathlib import Path
+
+        tree = ast.parse(
+            (Path(__file__).parent / "runner.py").read_text(encoding="utf-8")
+        )
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and getattr(node.func, "id", "") == \
+                    "require_exact_repository":
+                self.fail("runner must not self-validate the allowlist")
 
 
 if __name__ == "__main__":

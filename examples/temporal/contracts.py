@@ -12,14 +12,21 @@ _STATUSES = frozenset({"completed", "in_progress", "queued", "requested", "waiti
 _CONCLUSIONS = frozenset({"success", "failure", "cancelled", "timed_out", "action_required", "neutral", "skipped", "stale", "startup_failure", "unknown"})
 
 
+def validate_repository(value: str) -> str:
+    """Validate a repository name shape without granting any allowlist authority."""
+    if not isinstance(value, str) or not _REPO.fullmatch(value):
+        raise ValueError("Invalid repository")
+    if any(part in {".", ".."} or part.startswith(".") for part in value.split("/")):
+        raise ValueError("Unsafe repository")
+    return value
+
+
 def require_exact_repository(requested: str, configured: str) -> str:
     """Reject cross-repository requests; configuration is an allowlist of one."""
     if not isinstance(requested, str) or not isinstance(configured, str):
         raise ValueError("Repository must be a string")
-    if not _REPO.fullmatch(requested) or not _REPO.fullmatch(configured):
-        raise ValueError("Invalid repository")
-    if any(part in {".", ".."} or part.startswith(".") for part in requested.split("/")):
-        raise ValueError("Unsafe repository")
+    validate_repository(requested)
+    validate_repository(configured)
     if requested != configured:
         raise PermissionError("Repository is not operator-allowlisted")
     return requested
