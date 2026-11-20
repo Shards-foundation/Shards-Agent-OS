@@ -417,6 +417,32 @@ test("the proxy forwards browser Origin but never an untrusted actor", async () 
   assert.equal(captured.get("X-Forwarded-Host"), "agents.shardsinc.co.uk");
 });
 
+test("protocol-relative paths cannot redirect signed proxy requests to another host", async () => {
+  for (const pathname of [
+    "//attacker.example/steal?item=1",
+    "/%2F%2Fattacker.example/steal",
+  ]) {
+    let destination;
+    let forwarded;
+    const fetchImpl = async (url, init) => {
+      destination = new URL(url);
+      forwarded = init.headers;
+      return new Response("safe");
+    };
+    const response = await proxyToOrigin(
+      request(pathname, {
+        headers: { Cookie: "shards_agent_session=sensitive" },
+      }),
+      ENV, "owner@example.test", fetchImpl,
+    );
+    assert.equal(response.status, 200);
+    assert.equal(destination.origin, ORIGIN_BASE);
+    assert.equal(destination.hostname, "origin.internal.example");
+    assert.equal(forwarded.get("cookie"), "shards_agent_session=sensitive");
+    assert.match(forwarded.get("X-Shards-Assertion"), /^[0-9a-f]{32}\.\d+\.[0-9a-f]{64}$/);
+  }
+});
+
 test("the proxy refuses a non-https origin", async () => {
   await assert.rejects(
     proxyToOrigin(request("/"), { ...ENV, ORIGIN_BASE_URL: "http://origin.example" },
