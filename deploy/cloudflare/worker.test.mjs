@@ -372,6 +372,51 @@ test("the proxy forwards an assertion and never the Access JWT", async () => {
   assert.equal(response.headers.get("Set-Cookie"), "shards_agent_session=abc; HttpOnly");
 });
 
+test("the proxy preserves the HTML content type and same-origin redirect", async () => {
+  const fetchImpl = async () => new Response("", {
+    status: 303,
+    headers: {
+      "Location": "/",
+      "Set-Cookie": "shards_agent_session=abc; HttpOnly; Secure; SameSite=Strict",
+      "Content-Type": "text/html; charset=utf-8",
+      "Content-Security-Policy": "default-src 'none'",
+    },
+  });
+  const response = await proxyToOrigin(request("/auth/callback"), ENV,
+    "owner@example.test", fetchImpl);
+  assert.equal(response.status, 303);
+  assert.equal(response.headers.get("Location"), "/");
+  assert.match(response.headers.get("Content-Type"), /^text\/html/);
+  assert.equal(response.headers.get("Content-Security-Policy"), "default-src 'none'");
+  assert.match(response.headers.get("Set-Cookie"), /Secure/);
+});
+
+test("the proxy forwards browser Origin but never an untrusted actor", async () => {
+  let captured;
+  const fetchImpl = async (_url, init) => {
+    captured = init.headers;
+    return new Response("ok");
+  };
+  const response = await proxyToOrigin(
+    request("/ask", {
+      method: "POST",
+      headers: {
+        Origin: "https://agents.shardsinc.co.uk",
+        Referer: "https://agents.shardsinc.co.uk/",
+        "X-Shards-Actor": "attacker@example.test",
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: "question=test",
+    }),
+    ENV, "owner@example.test", fetchImpl,
+  );
+  assert.equal(response.status, 200);
+  assert.equal(captured.get("origin"), "https://agents.shardsinc.co.uk");
+  assert.equal(captured.get("referer"), "https://agents.shardsinc.co.uk/");
+  assert.equal(captured.get("X-Shards-Actor"), "owner@example.test");
+  assert.equal(captured.get("X-Forwarded-Host"), "agents.shardsinc.co.uk");
+});
+
 test("the proxy refuses a non-https origin", async () => {
   await assert.rejects(
     proxyToOrigin(request("/"), { ...ENV, ORIGIN_BASE_URL: "http://origin.example" },
