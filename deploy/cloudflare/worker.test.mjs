@@ -356,7 +356,7 @@ test("the proxy forwards an assertion and never the Access JWT", async () => {
     request("/", {
       headers: {
         "Cf-Access-Jwt-Assertion": "browser-jwt-value",
-        Cookie: "shards_agent_session=abc",
+        Cookie: "CF_Authorization=cloudflare-access-token; other=private; shards_agent_session=abc",
       },
     }),
     ENV,
@@ -370,6 +370,20 @@ test("the proxy forwards an assertion and never the Access JWT", async () => {
   assert.equal(captured.init.headers.get("Cf-Access-Jwt-Assertion"), null);
   assert.equal(captured.init.headers.get("cookie"), "shards_agent_session=abc");
   assert.equal(response.headers.get("Set-Cookie"), "shards_agent_session=abc; HttpOnly");
+});
+
+test("the proxy does not send Access bearer cookies to the origin", async () => {
+  let cookie;
+  await proxyToOrigin(
+    request("/", { headers: { Cookie: "CF_Authorization=sensitive-access-token" } }),
+    ENV,
+    "owner@example.test",
+    async (_url, init) => {
+      cookie = init.headers.get("cookie");
+      return new Response("ok");
+    },
+  );
+  assert.equal(cookie, null);
 });
 
 test("the proxy preserves the HTML content type and same-origin redirect", async () => {
