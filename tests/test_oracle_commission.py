@@ -1,6 +1,7 @@
 """Offline staging commissioning with disposable keys and a private audit path."""
 import copy
 import io
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -85,6 +86,37 @@ class CommissionTests(unittest.TestCase):
         for field, value in (("subject", "stage-reserve"), ("audience", "elsewhere"), ("action", "add")):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 stage.verify_permit({**signed, field: value}, self.pins["kernel-issuer"])
+
+    def test_runtime_grant_import_does_not_reuse_first_commissioning_state(self):
+        unit = Path("/etc/systemd/system/shards-stage-origin.service")
+        first = stage.expected_unit_fields(unit, accepting_grant=False)
+        live = stage.expected_unit_fields(unit, accepting_grant=True)
+        self.assertEqual(first["ActiveState"], "inactive")
+        self.assertEqual(live["ActiveState"], "active")
+        for key in ("UnitFileState", "FragmentPath", "DropInPaths", "NeedDaemonReload"):
+            self.assertEqual(first[key], live[key])
+        self.assertEqual(live["UnitFileState"], "disabled")
+        self.assertEqual(live["DropInPaths"], "")
+
+        ledger = self.root / "audit.db"
+        kernel = SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid())
+        stage.verify_audit_state(ledger, kernel, accepting_grant=False)
+        with self.assertRaises(FileNotFoundError):
+            stage.verify_audit_state(ledger, kernel, accepting_grant=True)
+        ledger.write_bytes(b"existing-audit-must-remain-untouched")
+        ledger.chmod(0o600)
+        before = ledger.read_bytes()
+        stage.verify_audit_state(ledger, kernel, accepting_grant=True)
+        self.assertEqual(ledger.read_bytes(), before)
+        with self.assertRaisesRegex(ValueError, "unused"):
+            stage.verify_audit_state(ledger, kernel, accepting_grant=False)
+        ledger.chmod(0o644)
+        with self.assertRaisesRegex(ValueError, "private"):
+            stage.verify_audit_state(ledger, kernel, accepting_grant=True)
+        ledger.unlink()
+        ledger.symlink_to(self.root / "operator.json")
+        with self.assertRaises((ValueError, FileNotFoundError)):
+            stage.verify_audit_state(ledger, kernel, accepting_grant=True)
 
     def test_exclusive_private_outputs_and_safe_environment(self):
         path = self.root / "file"
