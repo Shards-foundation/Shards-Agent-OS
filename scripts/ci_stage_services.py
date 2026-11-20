@@ -35,15 +35,27 @@ def request(port, path, headers=None):
 
 def ready():
     deadline = time.monotonic() + 25
+    observed = {}
     while time.monotonic() < deadline:
-        try:
-            if (request(18765, "/health")[0] == 200 and
-                    request(12026, "/agent-os/")[0] == 403):
-                return
-        except OSError:
-            pass
+        for port, path in ((18765, "/health"), (12026, "/agent-os/")):
+            try:
+                observed[port] = request(port, path)[0]
+            except OSError as exc:
+                observed[port] = type(exc).__name__
+        if observed == {18765: 200, 12026: 403}:
+            return
         time.sleep(0.2)
-    raise RuntimeError("Expected a healthy kernel and an origin refusing unsigned requests")
+    for unit in UNITS:
+        subprocess.run(["systemctl", "show", unit, "-p", "Id", "-p", "SubState",
+                        "-p", "Result", "-p", "ExecMainStatus", "-p", "NRestarts"], check=True)
+        # These are disposable services with generated test configuration. Only print
+        # error codes from the origin's structured refusal messages.
+        messages = subprocess.check_output(["journalctl", "-b", "-u", unit,
+                                            "-o", "cat", "-n", "20"], text=True)
+        for line in messages.splitlines():
+            if line.startswith('{"status": "REFUSED"'):
+                print(unit, json.loads(line)["error"])
+    raise RuntimeError(f"Staging readiness failed. HTTP results by port: {observed}")
 
 
 def call_kernel(token, permit):
@@ -87,7 +99,10 @@ def check_services():
         shutil.copyfile(policy, CONFIG / "operator.json")
         shutil.chown(CONFIG / "operator.json", group="shards-stage-kernel")
         (CONFIG / "operator.json").chmod(0o440)
-        shutil.copyfile(ws.authority_public, CONFIG / "authority.hex")
+        verifier = CONFIG / "authority.hex"
+        shutil.copyfile(ws.authority_public, verifier)
+        shutil.chown(verifier, user="shards-stage-web")
+        verifier.chmod(0o400)
         env_file(CONFIG / "kernel.env", kernel_env)
         env_file(CONFIG / "origin.env", {
             "CF_ACCOUNT_ID": "0"*32, "CF_WORKERS_AI_TOKEN": "unused-test-only",

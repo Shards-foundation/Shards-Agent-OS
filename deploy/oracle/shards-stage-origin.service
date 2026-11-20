@@ -13,10 +13,9 @@ StateDirectory=shards-stage-web
 StateDirectoryMode=0700
 WorkingDirectory=/var/lib/shards-stage-web
 EnvironmentFile=/etc/shards-agent-stage/origin.env
-LoadCredential=authority.hex:/etc/shards-agent-stage/authority.hex
 ExecStart=/opt/shards-agent-stage/venv/bin/shards-agent-os-agent \
     --db /var/lib/shards-stage-web/agent.sqlite3 --audience ${KERNEL_AUDIENCE} \
-    --authority-public-key-file %d/authority.hex --bundle-dir /etc/shards-agent-stage/bundles \
+    --authority-public-key-file /etc/shards-agent-stage/authority.hex --bundle-dir /etc/shards-agent-stage/bundles \
     --kernel-port 18765 --host 127.0.0.1 --port 12026 --mount-path /agent-os \
     --edge-public-origin ${STAGING_PUBLIC_ORIGIN} \
     --provider workers-ai --cf-account-id ${CF_ACCOUNT_ID} --provider-credential-env CF_WORKERS_AI_TOKEN
