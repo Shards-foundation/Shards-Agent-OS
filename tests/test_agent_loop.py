@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from shards_agent_os import agent_state
 from shards_agent_os.agent_loop import LoopError, ToolAuthority, run_turn
-from shards_agent_os.qwen_provider import ProviderError
+from shards_agent_os.qwen_provider import ModelReply, ProviderError
 from shards_agent_os.tool_permit_authority import arguments_digest
 
 from tests.agent_fixtures import (
@@ -426,3 +426,93 @@ class KernelDispatchFailureTests(LoopTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ModelRepairTests(unittest.TestCase):
+    """Exactly one repair turn: it re-formats prose, and grants nothing."""
+
+    def setUp(self):
+        self.ws = Workspace()
+        self.conversation = self.ws.conversation()
+
+    def tearDown(self):
+        self.ws.close()
+
+    def _run(self, provider, authority=None, question="What is a permit?"):
+        return run_turn(
+            self.ws.db_path, actor=ACTOR, conversation_id=self.conversation,
+            question=question, provider=provider,
+            authority=authority or self.ws.authority(), kernel_port=8765,
+        )
+
+    def test_prose_answer_is_repaired_into_a_successful_turn(self):
+        provider = ScriptedProvider(
+            "A permit allows one bounded action.",
+            decision("A permit allows one bounded action."),
+        )
+        turn = self._run(provider)
+        self.assertEqual(turn["status"], "SUCCEEDED", turn)
+        self.assertIn("bounded action", turn["reply"])
+        self.assertEqual(len(provider.calls), 2)
+        kinds = [r["kind"] for r in turn["receipts"]]
+        self.assertIn("model.repair_requested", kinds)
+        self.assertIn("model.call", kinds)
+
+    def test_a_second_bad_reply_is_final_and_not_retried_again(self):
+        provider = ScriptedProvider("prose one", "prose two", "prose three")
+        turn = self._run(provider)
+        self.assertEqual(turn["status"], "FAILED")
+        self.assertEqual(turn["error_code"], "MODEL_OUTPUT_NOT_JSON")
+        # Exactly two calls: the original and one repair. Never three.
+        self.assertEqual(len(provider.calls), 2)
+
+    def test_repair_cannot_invent_authority_for_a_tool(self):
+        """A repaired reply asking for a kernel tool is still denied."""
+        provider = ScriptedProvider(
+            "Let me echo that.",
+            decision("Echoing now.", "kernel.echo", {"text": "smuggled"}),
+        )
+        turn = self._run(provider)
+        self.assertEqual(turn["status"], "DENIED", turn)
+        self.assertEqual(turn["error_code"], "NO_KERNEL_BUNDLE_FOR_EXACT_CALL")
+        self.assertIsNone(turn["job_id"])
+        self.assertIsNone(turn["grant_id"])
+
+    def test_repair_cannot_escape_the_allowlist(self):
+        provider = ScriptedProvider(
+            "Running a shell command.",
+            decision("Running it.", "shell.exec", {"cmd": "rm -rf /tmp/x"}),
+        )
+        turn = self._run(provider)
+        self.assertEqual(turn["status"], "DENIED")
+        self.assertNotIn("rm -rf", json.dumps(turn.get("receipts", [])))
+
+    def test_the_repair_prompt_quotes_the_previous_answer_and_keeps_the_rules(self):
+        provider = ScriptedProvider("A permit allows one action.", decision("ok"))
+        self._run(provider)
+        repair_user = provider.calls[1]["user"]
+        # The previous answer is quoted so the model reformats instead of
+        # re-answering the original question in prose.
+        self.assertIn("A permit allows one action.", repair_user)
+        self.assertIn("JSON object", repair_user)
+        self.assertNotIn("what is a permit", repair_user.lower())
+        # The system prompt is unchanged: the rules were not relaxed.
+        self.assertEqual(provider.calls[0]["system"], provider.calls[1]["system"])
+
+    def test_the_repair_prompt_is_length_bounded(self):
+        provider = ScriptedProvider("x" * 9000, decision("ok"))
+        self._run(provider)
+        self.assertLessEqual(len(provider.calls[1]["user"]), 2600)
+
+    def test_a_provider_failure_during_repair_is_reported_not_hidden(self):
+        class Exploding(ScriptedProvider):
+            def complete(self, *, system, user, timeout_s):
+                self.calls.append({"system": system, "user": user})
+                if len(self.calls) == 2:
+                    raise ProviderError("TIMEOUT")
+                return ModelReply(text="prose", provider=self.name,
+                                  model=self.model, latency_ms=1)
+
+        turn = self._run(Exploding("prose"))
+        self.assertEqual(turn["status"], "FAILED")
+        self.assertEqual(turn["error_code"], "MODEL_TIMEOUT")

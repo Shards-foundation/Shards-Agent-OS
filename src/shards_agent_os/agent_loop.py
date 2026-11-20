@@ -59,6 +59,18 @@ Reply with EXACTLY one JSON object and nothing else:
 or
 {{"reply": "<your answer>", "tool": {{"name": "<allowlisted tool>", "arguments": {{...}}}}}}"""
 
+# Sent once if the first reply is not valid protocol JSON. It asks the model to
+# re-format its own text. This grants nothing: the reply is parsed by the same
+# strict parser and still needs an independent signed artefact before any tool
+# can run. The previous answer is included because a small model asked to
+# re-answer the original question simply answers it again in prose.
+REPAIR_TEMPLATE = (
+    "Convert your previous answer into the required JSON format.\n\n"
+    "Previous answer:\n{previous}\n\n"
+    "Respond with only this JSON object, filling in the reply text:\n"
+    '{{"reply": "<the previous answer, unchanged>", "tool": null}}'
+)
+
 
 class LoopError(RuntimeError):
     def __init__(self, code: str):
@@ -200,17 +212,43 @@ def run_turn(
 
     try:
         decision = parse_decision(model_reply.text)
-    except ProtocolError as exc:
+    except ProtocolError as first_error:
+        # Exactly one repair attempt: small local models often answer in prose.
+        # This re-formats; it cannot widen authority, and a second failure is
+        # final.
         agent_state.add_receipt(
-            db_path, turn_id=turn_id, actor=actor, kind="model.rejected",
-            payload={"code": exc.code},
+            db_path, turn_id=turn_id, actor=actor, kind="model.repair_requested",
+            payload={"code": first_error.code},
         )
-        agent_state.finish_turn(
-            db_path, turn_id=turn_id, status="FAILED", provider=model_reply.provider,
-            model=model_reply.model, model_latency_ms=model_reply.latency_ms,
-            error_code=exc.code,
+        try:
+            repaired = provider.complete(
+                system=SYSTEM_PROMPT,
+                user=REPAIR_TEMPLATE.format(previous=model_reply.text[:2000]),
+                timeout_s=model_timeout_s,
+            )
+        except ProviderError as exc:
+            return _fail(f"MODEL_{exc.code}")
+        except Exception:
+            return _fail("MODEL_CALL_FAILED")
+        agent_state.add_receipt(
+            db_path, turn_id=turn_id, actor=actor, kind="model.call",
+            payload={"provider": repaired.provider, "model": repaired.model,
+                     "latency_ms": repaired.latency_ms, "repair": True},
         )
-        return agent_state.get_turn(db_path, turn_id=turn_id, actor=actor)
+        model_reply = repaired
+        try:
+            decision = parse_decision(model_reply.text)
+        except ProtocolError as exc:
+            agent_state.add_receipt(
+                db_path, turn_id=turn_id, actor=actor, kind="model.rejected",
+                payload={"code": exc.code},
+            )
+            agent_state.finish_turn(
+                db_path, turn_id=turn_id, status="FAILED",
+                provider=model_reply.provider, model=model_reply.model,
+                model_latency_ms=model_reply.latency_ms, error_code=exc.code,
+            )
+            return agent_state.get_turn(db_path, turn_id=turn_id, actor=actor)
 
     if decision.tool_name is None:
         agent_state.finish_turn(
