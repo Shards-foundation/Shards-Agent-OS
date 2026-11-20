@@ -68,9 +68,25 @@ class WorkersAIResponseContractTests(unittest.TestCase):
         self.assertIs(payload["stream"], False)
         self.assertNotIn("max_tokens", payload)
 
-    def test_legacy_response_still_supported(self):
-        reply, _ = self.complete({"response": "legacy reply"})
+    def test_legacy_response_uses_legacy_token_budget(self):
+        self.provider = WorkersAIProvider(
+            account_id="a" * 32, model="@cf/qwen/qwen2.5-coder-32b-instruct",
+            max_tokens=75,
+        )
+        reply, payload = self.complete({"response": "legacy reply"})
         self.assertEqual(reply.text, "legacy reply")
+        self.assertEqual(payload["max_tokens"], 75)
+        self.assertIs(payload["stream"], False)
+        self.assertNotIn("max_completion_tokens", payload)
+        self.assertNotIn("reasoning_effort", payload)
+
+    def test_legacy_truncated_response_is_rejected_when_signalled(self):
+        self.provider = WorkersAIProvider(
+            account_id="a" * 32, model="@cf/qwen/qwen2.5-coder-32b-instruct",
+            max_tokens=75,
+        )
+        with self.assertRaisesRegex(ProviderError, "PROVIDER_INCOMPLETE_REPLY"):
+            self.complete({"response": "partial", "finish_reason": "length"})
 
     def test_reasoning_only_reply_has_no_user_text(self):
         result = {"choices": [{
