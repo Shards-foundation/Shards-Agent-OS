@@ -165,7 +165,12 @@ class WorkersAIProvider:
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            "max_tokens": self.max_tokens,
+            # Qwen 3.8's REST contract is Chat Completions, with reasoning
+            # tokens counted in the completion budget. Keep the generation
+            # bounded and prefer a short reasoning pass for small questions.
+            "max_completion_tokens": self.max_tokens,
+            "reasoning_effort": "low",
+            "stream": False,
             "temperature": 0.1,
         }
         url = f"{self.base_url}/accounts/{self.account_id}/ai/run/{self.model}"
@@ -178,7 +183,24 @@ class WorkersAIProvider:
         if decoded.get("success") is False:
             raise ProviderError("PROVIDER_REFUSED")
         result = decoded.get("result")
-        text = _extract_text(result)
+        if type(result) is dict and "choices" in result:
+            # Newer Workers AI Qwen models return a Chat Completions result
+            # with choices[0].message.content, not result.response.
+            choices = result["choices"]
+            if type(choices) is not list or len(choices) != 1 or type(choices[0]) is not dict:
+                raise ProviderError("PROVIDER_INVALID_JSON")
+            choice = choices[0]
+            if choice.get("finish_reason") == "length":
+                raise ProviderError("PROVIDER_INCOMPLETE_REPLY")
+            message = choice.get("message")
+            if type(message) is not dict or message.get("role") != "assistant":
+                raise ProviderError("PROVIDER_INVALID_JSON")
+            if message.get("tool_calls") or message.get("function_call"):
+                raise ProviderError("PROVIDER_UNSUPPORTED_TOOL_CALL")
+            text = _extract_text(message)
+        else:
+            # Retain compatibility with legacy Workers AI response envelopes.
+            text = _extract_text(result)
         return ModelReply(
             text=text, provider=self.name, model=self.model,
             latency_ms=int((time.monotonic() - started) * 1000),
