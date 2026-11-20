@@ -165,6 +165,68 @@ class AuthorityDocumentTests(unittest.TestCase):
             )
 
 
+class AuthorityCliTests(unittest.TestCase):
+    """The offline authority must refuse to run without a live terminal."""
+
+    def setUp(self):
+        self.ws = Workspace()
+
+    def tearDown(self):
+        self.ws.close()
+
+    def test_keygen_refuses_a_piped_passphrase(self):
+        import subprocess
+        import sys
+
+        completed = subprocess.run(
+            [sys.executable, "-m", "shards_agent_os.authority_cli", "keygen",
+             "--private-key-file", str(self.ws.root / "new-priv.pem"),
+             "--public-key-file", str(self.ws.root / "new-pub.hex")],
+            input="passphrase-0123456789\npassphrase-0123456789\n",
+            capture_output=True, text=True, timeout=60, check=False,
+        )
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("refused", completed.stderr)
+        # Nothing was written.
+        self.assertFalse((self.ws.root / "new-priv.pem").exists())
+
+    def test_verify_subcommand_accepts_a_valid_document(self):
+        import subprocess
+        import sys
+
+        path = self.ws.delegation()
+        completed = subprocess.run(
+            [sys.executable, "-m", "shards_agent_os.authority_cli", "verify",
+             "--public-key-file", self.ws.authority_public, "--document", path],
+            capture_output=True, text=True, timeout=60, check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        payload = json.loads(completed.stdout)
+        self.assertTrue(payload["verified"])
+        self.assertEqual(payload["kind"], "observation-delegation")
+
+    def test_verify_subcommand_rejects_a_tampered_document(self):
+        import subprocess
+        import sys
+
+        path = self.ws.delegation()
+        document = load_signed_document(path)
+        document["actor"] = "attacker@example.test"
+        tampered = os.path.join(str(self.ws.root), "tampered.json")
+        os.chmod(tampered, 0o600) if os.path.exists(tampered) else None
+        fd = os.open(tampered, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(fd, "w") as stream:
+            json.dump(document, stream)
+        completed = subprocess.run(
+            [sys.executable, "-m", "shards_agent_os.authority_cli", "verify",
+             "--public-key-file", self.ws.authority_public, "--document", tampered],
+            capture_output=True, text=True, timeout=60, check=False,
+        )
+        self.assertEqual(completed.returncode, 2)
+        self.assertNotIn("attacker", completed.stdout)
+        self.assertNotIn("attacker", completed.stderr)
+
+
 class KernelBundleTests(unittest.TestCase):
     def setUp(self):
         self.ws = Workspace()
