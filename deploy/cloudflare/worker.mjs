@@ -296,7 +296,13 @@ export async function proxyToOrigin(
   });
   const target = new URL(request.url);
   const origin = new URL(env.ORIGIN_BASE_URL);
-  const url = new URL(target.pathname + target.search, origin);
+  // A pathname beginning with "//" is a protocol-relative URL when passed
+  // to new URL(path, base): that would leak actor assertions to another host.
+  // Assign URL components without ever reparsing untrusted path as authority.
+  const url = new URL(origin.href);
+  url.pathname = target.pathname;
+  url.search = target.search;
+  url.hash = "";
 
   // Never forward the browser's Access JWT: the origin does not understand it
   // and it is a bearer credential for a different audience.
