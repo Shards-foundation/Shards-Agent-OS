@@ -289,7 +289,7 @@ def issue_delegation(
 def issue_kernel_bundle(
     *, private_key_path: str, passphrase: bytes, output_path: str,
     permit_file: str, audience: str, actor: str, tool: str, arguments: dict,
-    ttl_seconds: int, now_ms: int | None = None,
+    ttl_seconds: int, now_ms: int | None = None, installed_permit_file: str | None = None,
 ) -> dict:
     """Bind an already-signed kernel permit to this actor, tool and arguments.
 
@@ -310,6 +310,12 @@ def issue_kernel_bundle(
         raise AuthorityError("ABSOLUTE_PATH_REQUIRED")
     if not os.path.isfile(permit_file):
         raise AuthorityError("PERMIT_FILE_MISSING")
+    if installed_permit_file is not None:
+        if (not isinstance(installed_permit_file, str) or not os.path.isabs(installed_permit_file)
+                or os.path.normpath(installed_permit_file) != installed_permit_file
+                or not os.path.basename(installed_permit_file) or "\0" in installed_permit_file):
+            raise AuthorityError("INVALID_PERMIT_PATH")
+        permit_file = installed_permit_file
     if type(ttl_seconds) is not int or not 60 <= ttl_seconds <= 3600:
         raise AuthorityError("INVALID_TTL")
     issued = int(time.time() * 1000) if now_ms is None else now_ms

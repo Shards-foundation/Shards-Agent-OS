@@ -5,15 +5,22 @@ import http.client
 import json
 import os
 import platform
+import pwd
 import secrets
-import shutil
+import tempfile
+from types import SimpleNamespace
 import sqlite3
 import subprocess
 import time
 from pathlib import Path
 
 from shards_agent_os.web_server import sign_assertion
-from tests.agent_fixtures import ACTOR, AUDIENCE, Workspace, issue_echo_permit, write_signed_kernel_policy
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from deploy.oracle import commission as stage
+from shards_agent_os.tool_permit_authority import generate_authority_key, issue_kernel_bundle, public_key_from_file
+from shards_kernel.cli.offline_issuer import sign_operator_approval, issue_approved_permit
+from shards_kernel.integrations.wire import permit_to_mapping
+from tests.agent_fixtures import ACTOR
 
 CONFIG = Path("/etc/shards-agent-stage")
 KERNEL_STATE = Path("/var/lib/shards-stage-kernel/audit.sqlite3")
@@ -62,7 +69,7 @@ def call_kernel(token, permit):
     result = subprocess.run([
         "/usr/sbin/runuser", "-u", "shards-stage-web", "--", PYTHON, "-I", "-m", "shards_kernel",
         "mcp-call", "--port", "18765", "--tool", "echo",
-        "--arguments-json", '{"text":"arm64-stage"}', "--permit-file", str(permit),
+        "--arguments-json", '{"text":"oracle-stage-acceptance"}', "--permit-file", str(permit),
     ], env={"PATH": os.defpath, "SHARDS_KERNEL_AGENT_TOKEN": token},
         capture_output=True, text=True, timeout=25)
     return result.returncode, json.loads(result.stdout)
@@ -72,14 +79,54 @@ def allowed_audit_entries(request_id):
     with sqlite3.connect(f"file:{KERNEL_STATE}?mode=ro", uri=True) as conn:
         return conn.execute(
             "SELECT ledger_seq, entry_hash FROM audit_entries WHERE kernel_id=? "
-            "AND request_id=? AND decision='ALLOW' ORDER BY ledger_seq", (AUDIENCE, request_id)
+            "AND request_id=? AND decision='ALLOW' ORDER BY ledger_seq", (stage.AUDIENCE, request_id)
         ).fetchall()
 
 
-def env_file(path, settings):
-    with path.open("x") as stream:
-        for key, value in settings.items():
-            stream.write(f"{key}={value}\n")
+def provision_fixture(root):
+    # CI simulates all four independent custodians with ephemeral keys.
+    authority = str(root / "agent-authority.key.pem")
+    verifier = CONFIG / "authority.hex"
+    phrase = b"temporary-ci-passphrase-12345"
+    generate_authority_key(private_path=authority, public_path=str(verifier), passphrase=phrase)
+    verifier.chmod(0o444)
+    policy, issuer, approver = [Ed25519PrivateKey.generate() for _ in range(3)]
+    keys = {"agent-authority": public_key_from_file(str(verifier)),
+            "kernel-policy": policy.public_key().public_bytes_raw().hex(),
+            "kernel-issuer": issuer.public_key().public_bytes_raw().hex()}
+    stage.save(CONFIG / "kernel-policy.pub.hex", keys["kernel-policy"].encode(), 0o444)
+    for state in (WEB_STATE.parent, KERNEL_STATE.parent):
+        user = pwd.getpwnam(state.name)
+        state.mkdir(mode=0o700)
+        os.chown(state, user.pw_uid, user.pw_gid)
+    host = stage.host_preflight()
+    secret, request = stage.enrollment(host, create=True)
+    assert stage.enrollment(host, create=True) == (secret, request)
+    envelope = stage.sign(request, keys, policy)
+    stage.install_policy(envelope, secret, request)
+    stage.install_policy(envelope, secret, request)
+    assertion = secrets.token_hex(32)
+    stage.save(CONFIG / "origin.env", stage.origin_env(secret, "https://" + PUBLIC_HOST, "0"*32,
+                                                       secrets.token_hex(32), assertion))
+    draft = stage.stage_draft()
+    now = stage.millis()
+    approval = sign_operator_approval(draft, approver, reviewer="ci-reviewer", approved_at_ms=now,
+                                      expires_at_ms=now + 300_000)
+    permit = permit_to_mapping(issue_approved_permit(
+        draft, approval, issuer, approver.public_key().public_bytes_raw(), now_ms=now,
+        expected_issuer=stage.ISSUER, expected_key_id=stage.KEY_ID))
+    source = root / "permit.json"
+    stage.save(source, stage.encode(permit))
+    target = stage.verify_permit(permit, keys["kernel-issuer"])
+    bundle = root / "bundle.json"
+    issue_kernel_bundle(private_key_path=authority, passphrase=phrase, output_path=str(bundle),
+                        permit_file=str(source), installed_permit_file=str(target), audience=stage.AUDIENCE,
+                        actor=ACTOR, tool="kernel.echo", arguments=stage.ARGS, ttl_seconds=300)
+    stage.install_echo(SimpleNamespace(permit=source, bundle=bundle, actor=ACTOR), envelope, request)
+    for path in (CONFIG, verifier):
+        assert subprocess.run(["/usr/sbin/runuser", "-u", "shards-stage-web", "--",
+                               "test", "-w", path]).returncode == 1
+    return secret["web"], assertion, target
 
 
 def check_services():
@@ -96,37 +143,8 @@ def check_services():
     bundles = CONFIG / "bundles"
     bundles.mkdir(mode=0o755)
     bundles.chmod(0o755)
-    token = "stage-web." + secrets.token_hex(32)
-    secret = secrets.token_hex(32)
-    ws = Workspace()
-    try:
-        policy, kernel_env, ctx = write_signed_kernel_policy(
-            ws.root, agents=[{"actor": "stage-web", "token": token, "allowed_tools": ["echo"]}],
-            tools=["echo"], port=18765, audit_db=KERNEL_STATE,
-        )
-        shutil.copyfile(policy, CONFIG / "operator.json")
-        shutil.chown(CONFIG / "operator.json", group="shards-stage-kernel")
-        (CONFIG / "operator.json").chmod(0o440)
-        verifier = CONFIG / "authority.hex"
-        shutil.copyfile(ws.authority_public, verifier)
-        verifier.chmod(0o444)
-        assert verifier.stat().st_uid == 0
-        for path in (CONFIG, verifier):
-            assert subprocess.run(["/usr/sbin/runuser", "-u", "shards-stage-web", "--",
-                                   "test", "-w", path]).returncode == 1
-        env_file(CONFIG / "kernel.env", kernel_env)
-        env_file(CONFIG / "origin.env", {
-            "CF_ACCOUNT_ID": "0"*32, "CF_WORKERS_AI_TOKEN": "unused-test-only",
-            "KERNEL_AUDIENCE": AUDIENCE, "STAGING_PUBLIC_ORIGIN": "https://" + PUBLIC_HOST,
-            "SHARDS_KERNEL_AGENT_TOKEN": token, "SHARDS_EDGE_ASSERTION_SECRET": secret,
-        })
-        permit = CONFIG / "permit.json"
-        source = issue_echo_permit(ws.root, ctx, text="arm64-stage", subject="stage-web")
-        shutil.copyfile(source, permit)
-        shutil.chown(permit, user="shards-stage-web")
-        # The services receive only the public verifier, signed documents and role-specific secrets.
-    finally:
-        ws.close()
+    with tempfile.TemporaryDirectory() as root:
+        token, secret, permit = provision_fixture(Path(root))
 
     def signed_headers():
         nonce, ts = secrets.token_hex(16), int(time.time() * 1000)
@@ -148,8 +166,10 @@ def check_services():
         used = signed_headers()
         status, cookie, page = request(12026, "/agent-os/", used)
         assert status == 200 and ACTOR.encode() in page and "Secure" in cookie
+        code, refusal = call_kernel(token, CONFIG / "absent-permit.json")
+        assert code != 0 and refusal.get("decision") != "ALLOW"
         code, receipt = call_kernel(token, permit)
-        assert code == 0 and receipt["decision"] == "ALLOW" and receipt["result"] == "arm64-stage"
+        assert code == 0 and receipt["decision"] == "ALLOW" and receipt["result"] == stage.ARGS["text"]
 
         allowed_request = receipt["request_id"]
         entries_before_restart = allowed_audit_entries(allowed_request)

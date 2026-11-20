@@ -8,6 +8,8 @@ From an approved operator session on the VM, run `python3 deploy/oracle/inspect-
 
 Reserve `127.0.0.1:18765` for the kernel and `127.0.0.1:12026` for the web service only after checking they are free. Confirm the two proposed users, unit names and paths are unused or belong to this exact staging installation. Keep the checkout, venv, unit files and configurations outside runner-writable directories. No Docker or gVisor service is needed for the signed read-only echo/add operator.
 
+For a host with the units, venv and public pins already installed, continue with [first commissioning](COMMISSIONING.md).
+
 ## Prepare the two services
 
 Use a reviewed checkout of the intended PR SHA on Ubuntu 24.04 ARM64. The host administrator runs the following on the qualified staging host. Use an approved Python package source or wheelhouse and the distribution's Python 3.12 with `python3-venv`.
