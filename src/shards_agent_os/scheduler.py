@@ -187,9 +187,9 @@ def _result_state(job: Job, returncode: int, stdout: str) -> tuple[str, dict]:
 def run_once(
     db_path: str | os.PathLike[str], *, now_ms: int | None = None, timeout_s: float = 30.0,
     runner: Callable[[Job, float], tuple[int, str]] = _invoke_kernel,
-    max_running: int = 1,
+    max_running: int = 1, job_id: str | None = None,
 ) -> dict | None:
-    """Atomically claim one due job; never auto-retry RUNNING/UNKNOWN jobs.
+    """Atomically claim the requested due job (or the oldest due job); never auto-retry RUNNING/UNKNOWN jobs.
 
     If this process crashes after claim, RUNNING remains visible for manual
     reconciliation. A timeout does not prove the operator stopped executing.
@@ -216,10 +216,11 @@ def run_once(
         if running >= max_running:
             conn.commit()
             return None
-        row = conn.execute(
-            "SELECT * FROM jobs WHERE status='PENDING' AND run_at_ms <= ? ORDER BY run_at_ms, job_id LIMIT 1",
-            (now,),
-        ).fetchone()
+        due = "SELECT * FROM jobs WHERE status='PENDING' AND run_at_ms <= ?"
+        if job_id is None:
+            row = conn.execute(due + " ORDER BY run_at_ms, job_id LIMIT 1", (now,)).fetchone()
+        else:
+            row = conn.execute(due + " AND job_id = ?", (now, job_id)).fetchone()
         if row is None:
             conn.commit()
             return None

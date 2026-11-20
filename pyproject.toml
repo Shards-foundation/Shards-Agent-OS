@@ -21,6 +21,9 @@ dependencies = []
 
 [project.optional-dependencies]
 kernel = ["shards-kernel[crypto,mcp]==0.1.3"]
+# Real in-process Qwen inference for a controlled host with no hosted credential.
+# Optional on purpose: the governed loop is testable without it.
+local-qwen = ["torch>=2.4", "transformers>=4.44"]
 
 [project.scripts]
 shards-agent-os = "shards_agent_os.__main__:main"
@@ -30,6 +33,8 @@ shards-agent-os-sandbox-call = "shards_agent_os.sandbox_client:main"
 shards-agent-os-doctor = "shards_agent_os.host_doctor:main"
 shards-agent-os-bootstrap = "shards_agent_os.host_bootstrap:main"
 shards-agent-os-approve = "shards_agent_os.offline_approver:main"
+shards-agent-os-authority = "shards_agent_os.authority_cli:main"
+shards-agent-os-agent = "shards_agent_os.agent_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

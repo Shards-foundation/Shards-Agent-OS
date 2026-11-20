@@ -1,0 +1,9 @@
+# Isolated staging bundle. The existing hub imports routeAgentOS in its own entry.
+name = "shards-agent-os-staging"
+main = "agent-os.mjs"
+compatibility_date = "2026-10-01"
+workers_dev = false
+preview_urls = false
+
+# The operator supplies ACCESS_TEAM_DOMAIN, ACCESS_AUD, ORIGIN_BASE_URL and
+# ORIGIN_ASSERTION_SECRET for this environment. See README.md.

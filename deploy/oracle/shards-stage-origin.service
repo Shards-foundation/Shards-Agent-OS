@@ -1,0 +1,38 @@
+[Unit]
+Description=Shards staging Agent OS origin
+Requires=shards-stage-kernel.service
+After=network-online.target shards-stage-kernel.service
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=shards-stage-web
+Group=shards-stage-web
+UMask=0077
+StateDirectory=shards-stage-web
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/shards-stage-web
+EnvironmentFile=/etc/shards-agent-stage/origin.env
+ExecStart=/opt/shards-agent-stage/venv/bin/shards-agent-os-agent \
+    --db /var/lib/shards-stage-web/agent.sqlite3 --audience ${KERNEL_AUDIENCE} \
+    --authority-public-key-file /etc/shards-agent-stage/authority.hex --bundle-dir /etc/shards-agent-stage/bundles \
+    --kernel-port 18765 --host 127.0.0.1 --port 12026 --mount-path /agent-os \
+    --edge-public-origin ${STAGING_PUBLIC_ORIGIN} \
+    --provider workers-ai --cf-account-id ${CF_ACCOUNT_ID} --provider-credential-env CF_WORKERS_AI_TOKEN
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SocketBindDeny=any
+SocketBindAllow=ipv4:tcp:12026
+
+[Install]
+WantedBy=multi-user.target
