@@ -26,6 +26,7 @@ import json
 import os
 import re
 import secrets
+import sqlite3
 import threading
 import time
 from dataclasses import dataclass, field
@@ -72,6 +73,7 @@ class WebConfig:
     host: str = "127.0.0.1"
     port: int = 12000
     allow_fixture: bool = False
+    edge_public_origin: str | None = None  # HTTPS public origin, explicitly configured
     sessions: dict[str, dict] = field(default_factory=dict)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -82,6 +84,8 @@ def _connect(db_path: str):
         session_id TEXT PRIMARY KEY, actor TEXT NOT NULL,
         csrf_token TEXT NOT NULL, created_at_ms INTEGER NOT NULL,
         expires_at_ms INTEGER NOT NULL)""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS agent_assertion_nonces (
+        nonce TEXT PRIMARY KEY, seen_at_ms INTEGER NOT NULL)""")
     conn.commit()
     return conn
 
@@ -117,11 +121,35 @@ def verify_assertion(secret: bytes, *, actor: str, nonce: str, ts_ms: int,
         raise WebError("ASSERTION_INVALID", 403)
 
 
-def _create_session(config: WebConfig, *, actor: str) -> tuple[str, str]:
+def _record_nonce(conn, nonce: str, now: int) -> None:
+    """Consume an assertion exactly once; SQLite's unique key closes races."""
+    try:
+        conn.execute(
+            "INSERT INTO agent_assertion_nonces (nonce, seen_at_ms) VALUES (?,?)",
+            (nonce, now),
+        )
+    except sqlite3.IntegrityError:
+        raise WebError("ASSERTION_REPLAYED", 403) from None
+    conn.execute(
+        "DELETE FROM agent_assertion_nonces WHERE seen_at_ms < ?",
+        (now - 2 * ASSERTION_MAX_SKEW_MS,),
+    )
+
+
+def _consume_nonce(config: WebConfig, nonce: str) -> None:
+    with _connect(config.db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        _record_nonce(conn, nonce, _now_ms())
+
+
+def _create_session(config: WebConfig, *, actor: str,
+                    assertion_nonce: str | None = None) -> tuple[str, str]:
     session_id, csrf = secrets.token_hex(16), secrets.token_urlsafe(32)
     now = _now_ms()
     with _connect(config.db_path) as conn:
         conn.execute("BEGIN IMMEDIATE")
+        if assertion_nonce is not None:
+            _record_nonce(conn, assertion_nonce, now)
         conn.execute(
             "INSERT INTO agent_sessions VALUES (?,?,?,?,?)",
             (session_id, actor, csrf, now, now + SESSION_TTL_MS),
@@ -328,12 +356,48 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args: Any) -> None:  # noqa: D102 - quiet
         return
 
+    def _edge_claim(self) -> tuple[str, str] | None:
+        """Verify the edge assertion independently of browser cookies.
+
+        Only a valid signed edge assertion can enable the public Host/Origin
+        path. The public origin must be explicitly configured by the operator.
+        """
+        if hasattr(self, "_cached_edge_claim"):
+            return self._cached_edge_claim
+        actor = self.headers.get("X-Shards-Actor")
+        packed = self.headers.get("X-Shards-Assertion")
+        forwarded_host = self.headers.get("X-Forwarded-Host")
+        if actor is None and packed is None and forwarded_host is None:
+            self._cached_edge_claim = None
+            return None
+        if not actor or not packed or not forwarded_host:
+            raise WebError("EDGE_ASSERTION_MISSING", 403)
+        public_origin = self.config.edge_public_origin
+        if not public_origin:
+            raise WebError("EDGE_NOT_CONFIGURED", 403)
+        parsed = urlsplit(public_origin)
+        if (parsed.scheme != "https" or not parsed.hostname or parsed.username
+                or parsed.password or parsed.path or parsed.query or parsed.fragment
+                or forwarded_host.lower() != parsed.netloc.lower()):
+            raise WebError("EDGE_HOST_INVALID", 403)
+        parts = packed.split(".")
+        if len(parts) != 3:
+            raise WebError("INVALID_ASSERTION", 403)
+        nonce, timestamp, signature = parts
+        if not timestamp.isascii() or not timestamp.isdecimal():
+            raise WebError("INVALID_ASSERTION", 403)
+        verify_assertion(self.config.edge_secret, actor=actor, nonce=nonce,
+                         ts_ms=int(timestamp), signature=signature)
+        self._cached_edge_claim = (actor, nonce)
+        return self._cached_edge_claim
+
     def _allowed_host(self) -> bool:
         host = (self.headers.get("Host") or "").strip().lower()
         expected = {f"{self.config.host}:{self.config.port}",
                     f"localhost:{self.config.port}",
                     f"127.0.0.1:{self.config.port}"}
-        return host in expected
+        edge = self._edge_claim()
+        return bool(edge) or host in expected
 
     def _send(self, status: int, body: str, *, content_type: str = "text/html; charset=utf-8",
               headers: dict[str, str] | None = None) -> None:
@@ -348,6 +412,9 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         for key, value in (headers or {}).items():
             self.send_header(key, value)
+        pending_cookie = getattr(self, "_pending_edge_cookie", None)
+        if pending_cookie and "Set-Cookie" not in (headers or {}):
+            self.send_header("Set-Cookie", pending_cookie)
         if status >= 400:
             # An error may leave an unread body on the socket. Closing avoids
             # parsing leftover bytes as a new request.
@@ -359,11 +426,32 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
 
     def _session(self) -> dict | None:
         raw = self.headers.get("Cookie") or ""
+        session = None
         for chunk in raw.split(";"):
             name, _, value = chunk.strip().partition("=")
             if name == SESSION_COOKIE:
-                return _load_session(self.config, value)
-        return None
+                session = _load_session(self.config, value)
+                break
+        edge = self._edge_claim()
+        if edge is None:
+            return session
+        actor, nonce = edge
+        if session is not None and session["actor"] != actor:
+            raise WebError("EDGE_ACTOR_MISMATCH", 403)
+        if session is not None:
+            _consume_nonce(self.config, nonce)
+            return session
+        if self.command != "GET":
+            raise WebError("NOT_SIGNED_IN", 401)
+        session_id, csrf = _create_session(
+            self.config, actor=actor, assertion_nonce=nonce,
+        )
+        self._pending_edge_cookie = (
+            f"{SESSION_COOKIE}={session_id}; Path=/; HttpOnly; Secure; "
+            f"SameSite=Strict; Max-Age={SESSION_TTL_MS // 1000}"
+        )
+        return {"session_id": session_id, "actor": actor, "csrf_token": csrf,
+                "expires_at_ms": _now_ms() + SESSION_TTL_MS}
 
     def _require_session(self) -> dict:
         session = self._session()
@@ -374,12 +462,14 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
     def _check_origin(self) -> None:
         origin = self.headers.get("Origin")
         referer = self.headers.get("Referer")
-        expected = f"http://{self.config.host}:{self.config.port}"
+        expected = {f"http://{self.config.host}:{self.config.port}"}
+        if self._edge_claim():
+            expected.add(self.config.edge_public_origin)
         for value in (origin, referer):
             if not value:
                 continue
             parts = urlsplit(value)
-            if f"{parts.scheme}://{parts.netloc}" != expected:
+            if f"{parts.scheme}://{parts.netloc}" not in expected:
                 raise WebError("ORIGIN_MISMATCH", 403)
 
     def _check_csrf(self, form: dict[str, str], session: dict) -> None:
@@ -484,11 +574,13 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
             raise WebError("INVALID_ASSERTION", 403) from None
         verify_assertion(self.config.edge_secret, actor=actor, nonce=nonce,
                          ts_ms=ts_ms, signature=signature)
-        session_id, _csrf = _create_session(self.config, actor=actor)
+        session_id, _csrf = _create_session(
+            self.config, actor=actor, assertion_nonce=nonce,
+        )
         self._send(303, "", headers={
             "Location": "/",
             "Set-Cookie": f"{SESSION_COOKIE}={session_id}; Path=/; HttpOnly; "
-                          "SameSite=Strict; Max-Age={SESSION_TTL_MS // 1000}",
+                          f"SameSite=Strict; Max-Age={SESSION_TTL_MS // 1000}",
         })
 
     def _auth_exchange(self) -> None:
@@ -504,7 +596,9 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
             nonce=payload.get("nonce"), ts_ms=payload.get("ts"),
             signature=payload.get("sig"),
         )
-        session_id, csrf = _create_session(self.config, actor=payload["actor"])
+        session_id, csrf = _create_session(
+            self.config, actor=payload["actor"], assertion_nonce=payload["nonce"],
+        )
         self._send(200, json.dumps({"session": session_id, "csrf": csrf}),
                    content_type="application/json")
 
