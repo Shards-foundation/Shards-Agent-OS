@@ -1,0 +1,10 @@
+{
+  "stage": "done",
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "provider": "local-transformers",
+  "latency_ms": 1359,
+  "prompt": "What is the capital of France?",
+  "reply": "Paris, the capital city of France.",
+  "wall_seconds": 13.96,
+  "torch_threads": "2"
+}

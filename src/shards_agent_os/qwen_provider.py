@@ -33,11 +33,18 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 from urllib.parse import urlsplit
 
+# Local inference dtypes. float32 is the safe default; bfloat16 halves the
+# resident weight size on a constrained host, and bfloat16 keeps the exponent
+# range of float32 so greedy decoding stays stable.
+_TORCH_DTYPES = ("float32", "bfloat16", "float16")
+
 MAX_PROVIDER_RESPONSE_BYTES = 262_144
 DEFAULT_MAX_TOKENS = 400
 PROVIDER_KINDS = ("workers-ai", "openai-compatible", "local-transformers", "fixture")
 
-_MODEL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/@-]{1,127}\Z")
+# Workers AI model names are namespaced with a leading "@" (e.g.
+# "@cf/qwen/qwen3.8-27b"); Hugging Face ids start with an alphanumeric.
+_MODEL_NAME = re.compile(r"@?[A-Za-z0-9][A-Za-z0-9_.:/@-]{1,127}\Z")
 _ACCOUNT_ID = re.compile(r"[0-9a-f]{32}\Z")
 _ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]{2,63}\Z")
 
@@ -254,15 +261,18 @@ class LocalTransformersProvider:
 
     def __init__(
         self, *, model: str = "Qwen/Qwen2.5-1.5B-Instruct", max_tokens: int = 220,
-        revision: str | None = None,
+        revision: str | None = None, dtype: str = "float32",
     ) -> None:
         if type(model) is not str or not _MODEL_NAME.fullmatch(model):
             raise ValueError("Invalid model identifier")
         if type(max_tokens) is not int or not 1 <= max_tokens <= 1024:
             raise ValueError("max_tokens must be 1..1024")
+        if dtype not in _TORCH_DTYPES:
+            raise ValueError("dtype must be one of " + ", ".join(_TORCH_DTYPES))
         self.model = model
         self.max_tokens = max_tokens
         self.revision = revision
+        self.dtype = dtype
         self._tokenizer = None
         self._model = None
 
@@ -277,7 +287,7 @@ class LocalTransformersProvider:
         kwargs = {"revision": self.revision} if self.revision else {}
         self._tokenizer = AutoTokenizer.from_pretrained(self.model, **kwargs)
         self._model = AutoModelForCausalLM.from_pretrained(
-            self.model, dtype=torch.float32, **kwargs
+            self.model, dtype=getattr(torch, self.dtype), **kwargs
         )
         self._model.eval()
 
@@ -341,7 +351,7 @@ def provider_from_config(config: Mapping[str, Any]) -> ModelProvider:
     Credentials are referenced by environment-variable name only, so a config
     file, a database row or a log line can never contain a key.
     """
-    if type(config) is not Mapping:
+    if not isinstance(config, Mapping):
         raise ValueError("Provider configuration must be a mapping")
     kind = config.get("kind")
     if kind == "workers-ai":
@@ -362,5 +372,6 @@ def provider_from_config(config: Mapping[str, Any]) -> ModelProvider:
             model=config.get("model", "Qwen/Qwen2.5-1.5B-Instruct"),
             max_tokens=config.get("max_tokens", 220),
             revision=config.get("revision"),
+            dtype=config.get("dtype", "float32"),
         )
     raise ValueError("Unsupported provider kind")

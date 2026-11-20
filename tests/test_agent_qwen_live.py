@@ -218,5 +218,99 @@ class RealQwenWithSignedKernelTests(unittest.TestCase):
         self.assertEqual(receipt["payload"]["result"], text)
 
 
+
+class LocalProviderConfigurationTests(unittest.TestCase):
+    """Construction-time guards. These need no model weights, so CI runs them."""
+
+    def test_default_dtype_is_float32(self):
+        self.assertEqual(
+            LocalTransformersProvider(model="Qwen/Qwen2.5-1.5B-Instruct").dtype,
+            "float32",
+        )
+
+    def test_bfloat16_is_selectable_for_a_constrained_host(self):
+        provider = LocalTransformersProvider(
+            model="Qwen/Qwen2.5-3B-Instruct", dtype="bfloat16",
+        )
+        self.assertEqual(provider.dtype, "bfloat16")
+
+    def test_an_unknown_dtype_is_refused(self):
+        with self.assertRaises(ValueError):
+            LocalTransformersProvider(dtype="float64")
+
+    def test_dtype_reaches_the_provider_factory(self):
+        from shards_agent_os.qwen_provider import provider_from_config
+
+        provider = provider_from_config(
+            {"kind": "local-transformers", "model": "Qwen/Qwen2.5-3B-Instruct",
+             "dtype": "bfloat16"}
+        )
+        self.assertEqual(provider.dtype, "bfloat16")
+
+    def test_the_factory_defaults_to_float32(self):
+        from shards_agent_os.qwen_provider import provider_from_config
+
+        provider = provider_from_config({"kind": "local-transformers"})
+        self.assertEqual(provider.dtype, "float32")
+
+    def test_the_factory_accepts_a_plain_dict(self):
+        """The shipped CLI builds a plain dict; it must not be rejected."""
+        from shards_agent_os.qwen_provider import provider_from_config
+
+        provider = provider_from_config({"kind": "local-transformers"})
+        self.assertEqual(provider.name, "local-transformers")
+
+    def test_workers_ai_provider_accepts_its_own_default_model(self):
+        """The @cf/ namespace prefix must not be rejected by the model regex."""
+        from shards_agent_os.qwen_provider import WorkersAIProvider
+
+        provider = WorkersAIProvider(account_id="a" * 32)
+        self.assertEqual(provider.model, "@cf/qwen/qwen3.8-27b")
+
+    def test_workers_ai_provider_still_refuses_a_hostile_model_name(self):
+        from shards_agent_os.qwen_provider import WorkersAIProvider
+
+        for bad in ("../../etc/passwd", "a", "x" * 200, "@cf/../evil"):
+            with self.subTest(model=bad), self.assertRaises(ValueError):
+                WorkersAIProvider(account_id="a" * 32, model=bad)
+
+    def test_workers_ai_provider_refuses_a_non_qwen_model(self):
+        from shards_agent_os.qwen_provider import WorkersAIProvider
+
+        with self.assertRaises(ValueError):
+            WorkersAIProvider(account_id="a" * 32, model="@cf/meta/llama-3-8b-instruct")
+
+    def test_every_provider_kind_builds_from_the_cli_config(self):
+        """The shipped CLI must be able to start each real provider."""
+        import argparse
+
+        from shards_agent_os.agent_cli import _provider_config
+        from shards_agent_os.qwen_provider import provider_from_config
+
+        cases = [
+            ("openai-compatible", "Qwen/Qwen2.5-3B-Instruct",
+             {"provider_base_url": "https://example.test/v1"}),
+            ("workers-ai", "@cf/qwen/qwen3.8-27b", {"cf_account_id": "a" * 32}),
+            ("local-transformers", "Qwen/Qwen2.5-3B-Instruct", {}),
+        ]
+        for kind, model, extra in cases:
+            args = argparse.Namespace(
+                provider=kind, model=model,
+                provider_base_url=extra.get("provider_base_url"),
+                provider_credential_env=None,
+                cf_account_id=extra.get("cf_account_id"), max_tokens=None,
+            )
+            with self.subTest(kind=kind):
+                provider = provider_from_config(_provider_config(args))
+                self.assertEqual(provider.name, kind)
+
+    def test_the_factory_refuses_a_non_mapping(self):
+        from shards_agent_os.qwen_provider import provider_from_config
+
+        for bad in ("local-transformers", ["kind"], None, 7):
+            with self.subTest(config=bad), self.assertRaises(ValueError):
+                provider_from_config(bad)
+
+
 if __name__ == "__main__":
     unittest.main()
