@@ -301,7 +301,7 @@ export async function proxyToOrigin(
   // Never forward the browser's Access JWT: the origin does not understand it
   // and it is a bearer credential for a different audience.
   const headers = new Headers();
-  for (const name of ["content-type", "cookie", "accept"]) {
+  for (const name of ["content-type", "cookie", "accept", "origin", "referer"]) {
     const value = request.headers.get(name);
     if (value) headers.set(name, value);
   }
@@ -321,7 +321,8 @@ export async function proxyToOrigin(
   const responseHeaders = new Headers();
   for (const [name, value] of upstream.headers) {
     const lower = name.toLowerCase();
-    if (lower === "set-cookie" || lower.startsWith("x-")) {
+    if (["set-cookie", "content-type", "location", "content-security-policy",
+         "cache-control"].includes(lower) || lower.startsWith("x-")) {
       responseHeaders.append(name, value);
     }
   }
