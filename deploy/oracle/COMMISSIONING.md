@@ -68,6 +68,14 @@ Use the private working directory created above. Move only the draft, approval a
 
 The reviewed call is `echo({"text":"oracle-stage-acceptance"})`, once, within ten minutes. The human reads the displayed draft and types its permit ID with the displayed approval phrase. Approval lasts at most five minutes. The issuer verifies the approval, key ID, subject, audience, time and exact call. A separate verifier checks the emitted permit against the pinned issuer. The Agent OS sidecar binds the exact Access actor, arguments and Oracle permit path for five minutes.
 
+### Existing running staging host: guarded grant import
+
+The initial `enroll`, `install-policy` and `configure-origin` steps are **not** repeatable commissioning procedures after the Kernel has started and written its audit ledger. Do not remove, recreate or reset the ledger to satisfy first-run preflight. The `install-echo` subcommand instead runs the dedicated live-host checks: both installed application units must be active but disabled, the existing Kernel ledger must be a private regular file owned by its service account, the installed systemd units and trust pins must match the reviewed files, and the signed operator policy must still be valid. Any mismatch refuses the import.
+
+**Host source revision:** Ensure the Oracle installation's `deploy/oracle/commission.py` has been separately updated to the independently reviewed live-host-aware version **before** using `stage install-echo`. The already-running application package and Qwen provider do not require replacement for grant import. Keep the Kernel service running throughout this procedure.
+
+The web origin loads signed bundles at startup rather than dynamically. After the authenticated import succeeds, restart **only** `shards-stage-origin.service` and re-check loopback HTTP 403 plus Kernel health 200; never restart the Kernel just to load a new bundle. Prepare and inspect the key custody and file transfer steps beforehand, then create a fresh short-lived draft/approval/permit immediately before the hosted test. If any artifact expires, stop and create a fresh approved chain; never enlarge the validity windows or bypass verification.
+
 In Termius, run the command below and paste the two signed documents into the hidden prompts. The operator can copy each one-line JSON document locally from the Linux container, for example with `wl-copy < permit.json` and then `wl-copy < bundle.json` where clipboard support exists. Clear the clipboard after importing. This transfer needs no ChromeOS shared folder. An existing private SFTP route also works with `--permit FILE --bundle FILE` and mode 0600 uploads. Keep signed grants in private terminals and authorised transfers.
 
 ```sh
