@@ -109,8 +109,11 @@ def check_services():
         (CONFIG / "operator.json").chmod(0o440)
         verifier = CONFIG / "authority.hex"
         shutil.copyfile(ws.authority_public, verifier)
-        shutil.chown(verifier, user="shards-stage-web")
-        verifier.chmod(0o400)
+        verifier.chmod(0o444)
+        assert verifier.stat().st_uid == 0
+        for path in (CONFIG, verifier):
+            assert subprocess.run(["/usr/sbin/runuser", "-u", "shards-stage-web", "--",
+                                   "test", "-w", path]).returncode == 1
         env_file(CONFIG / "kernel.env", kernel_env)
         env_file(CONFIG / "origin.env", {
             "CF_ACCOUNT_ID": "0"*32, "CF_WORKERS_AI_TOKEN": "unused-test-only",

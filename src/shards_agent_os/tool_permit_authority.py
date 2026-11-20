@@ -360,7 +360,7 @@ def public_key_from_file(path: str) -> str:
     fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
         info = os.fstat(fd)
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid not in (0, os.geteuid())
                 or stat.S_IMODE(info.st_mode) & 0o022 or not 1 <= info.st_size <= 4096):
             raise AuthorityError("DOCUMENT_PERMISSIONS")
         data = os.read(fd, 4097)
