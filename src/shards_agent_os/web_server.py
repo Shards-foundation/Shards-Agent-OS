@@ -353,6 +353,12 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
 
     # --- plumbing ---------------------------------------------------------
 
+    def handle_one_request(self) -> None:
+        """Clear request-scoped identity across HTTP/1.1 keep-alive requests."""
+        self.__dict__.pop("_cached_edge_claim", None)
+        self.__dict__.pop("_pending_edge_cookie", None)
+        super().handle_one_request()
+
     def log_message(self, fmt: str, *args: Any) -> None:  # noqa: D102 - quiet
         return
 
