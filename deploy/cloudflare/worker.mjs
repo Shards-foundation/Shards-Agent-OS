@@ -1,30 +1,8 @@
 /**
  * Shards Agent OS — Cloudflare Worker edge integration.
  *
- * This module is a *patch to the existing* `shards-agent-hub-ai` Worker. It
- * does not replace the deployed Worker and it does not create a second chat
- * surface. It adds three things in front of the Agent OS origin:
- *
- *   1. Real Cloudflare Access JWT verification (RS256 against the team's
- *      published certs), so the origin receives a trustworthy actor identity
- *      instead of a spoofable header.
- *   2. A short-lived HMAC assertion that the origin verifies itself
- *      (`shards_agent_os.web_server.verify_assertion`). The origin never parses
- *      an Access JWT and holds no Cloudflare credential.
- *   3. Transparent proxying of the origin's server-rendered, no-JavaScript UI
- *      and its governed `/ask` route, plus the existing `/api/chat` path now
- *      calling the real Workers AI Qwen binding.
- *
- * Deliberate properties:
- *   - The Worker holds no model API key: `env.AI` is a credential-free binding.
- *   - No secret ever reaches the browser. The only cookie is the origin's own
- *     opaque session cookie, which the Worker forwards untouched.
- *   - The Worker cannot mint a tool permit or an observation delegation. Those
- *     are Ed25519 documents produced offline by an independent authority and
- *     verified only inside the origin process.
- *
- * Deployment status: NOT deployed from this repository. See
- * `deploy/cloudflare/README.md` for the exact operator steps and blockers.
+ * Shared assertion and proxy helpers, plus the original standalone handler.
+ * The hub imports the scoped handler from agent-os.mjs. See README.md here.
  */
 
 const ACCESS_CERTS_TTL_MS = 60 * 60 * 1000;
@@ -149,10 +127,10 @@ export async function verifyAccessJwt(token, options) {
     throw new Error("JWT_NOT_YET_VALID");
   }
   const audiences = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
-  if (!audiences.includes(audience)) {
+  if (typeof audience !== "string" || !audience || !audiences.includes(audience)) {
     throw new Error("JWT_AUDIENCE_MISMATCH");
   }
-  if (typeof payload.iss !== "string" || !payload.iss.endsWith(".cloudflareaccess.com")) {
+  if (payload.iss !== `https://${teamDomain}`) {
     throw new Error("JWT_ISSUER_INVALID");
   }
   const email = payload.email;
@@ -253,7 +231,7 @@ function errorPage(status, code) {
 /* Routes                                                             */
 /* ------------------------------------------------------------------ */
 
-async function readActor(request, env, nowMs) {
+export async function readActor(request, env, nowMs) {
   const token =
     request.headers.get("Cf-Access-Jwt-Assertion") ||
     request.headers.get("cf-access-token");
@@ -340,6 +318,10 @@ export async function proxyToOrigin(
   }
   for (const [name, value] of Object.entries(BASE_HEADERS)) {
     responseHeaders.set(name, value);
+  }
+  // The origin opts in on form pages so same-origin POSTs carry their Origin.
+  if (upstream.headers.get("Referrer-Policy") === "same-origin") {
+    responseHeaders.set("Referrer-Policy", "same-origin");
   }
   return new Response(upstream.body, {
     status: upstream.status,

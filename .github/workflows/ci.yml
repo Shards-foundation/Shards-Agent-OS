@@ -45,6 +45,9 @@ jobs:
         run: python -m pip check
       - name: Assert live integration prerequisites
         run: python -c 'import importlib.metadata as m; import shards_agent_os, shards_kernel, mcp, cryptography; assert m.version("shards-kernel") == "0.1.3"; assert shards_kernel.__version__ == "0.1.3"; print("Published Shards-Kernel 0.1.3 and live test dependencies installed")'
+      - name: Worker route, Access and proxy contracts
+        if: matrix.python-version == '3.12'
+        run: node --test deploy/cloudflare/worker.test.mjs
       - name: Unit and real-process signed MCP integration tests
         run: python -Werror::ResourceWarning -m unittest discover -s tests -v
       - name: Verify installed kernel CLI and offline permit demo

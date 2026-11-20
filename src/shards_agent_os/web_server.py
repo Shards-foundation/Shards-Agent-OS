@@ -76,6 +76,7 @@ class WebConfig:
     edge_public_origin: str | None = None  # HTTPS public origin, explicitly configured
     sessions: dict[str, dict] = field(default_factory=dict)
     lock: threading.Lock = field(default_factory=threading.Lock)
+    mount_path: str = ""
 
 
 def _connect(db_path: str):
@@ -234,11 +235,11 @@ code,.mono{font-family:var(--mono);font-size:.8rem}
 
 
 def _page(title: str, body: str, *, actor: str | None = None,
-          csrf: str | None = None) -> str:
+          csrf: str | None = None, mount_path: str = "") -> str:
     logout = ""
     if actor and csrf:
         logout = (
-            '<form class="inline" method="post" action="/logout">'
+            f'<form class="inline" method="post" action="{mount_path}/logout">'
             f'<input type="hidden" name="csrf" value="{_escape(csrf)}">'
             '<button type="submit">Sign out</button></form>'
         )
@@ -259,7 +260,7 @@ require an independently signed grant. This page runs no JavaScript.
 </div></body></html>"""
 
 
-def _turn_card(turn: dict) -> str:
+def _turn_card(turn: dict, mount_path: str) -> str:
     status = _escape(turn["status"])
     css = {"SUCCEEDED": "ok", "DENIED": "denied", "FAILED": "failed",
            "UNKNOWN": "unknown"}.get(turn["status"], "")
@@ -279,7 +280,7 @@ def _turn_card(turn: dict) -> str:
                     f'({_escape(turn["tool_status"] or "")})</span>')
     if turn.get("error_code"):
         meta.append(f'<span>code <code>{_escape(turn["error_code"])}</code></span>')
-    meta.append(f'<a href="/turn/{_escape(turn["turn_id"])}">receipts</a>')
+    meta.append(f'<a href="{mount_path}/turn/{_escape(turn["turn_id"])}">receipts</a>')
     parts.append('<div class="meta">' + "".join(meta) + "</div>")
     parts.append("</article>")
     return "".join(parts)
@@ -291,13 +292,13 @@ def render_home(config: WebConfig, *, actor: str, csrf: str,
         config.db_path, actor=actor, conversation_id=conversation_id, limit=50,
     )
     notice_html = f'<div class="card notice">{_escape(notice)}</div>' if notice else ""
-    history = "".join(_turn_card(turn) for turn in turns) or (
+    history = "".join(_turn_card(turn, config.mount_path) for turn in turns) or (
         '<p class="empty">No questions yet. Ask about local dispatch state, or try '
         'the reference <code>kernel.echo</code> / <code>kernel.add</code> tools.</p>'
     )
     body = f"""{notice_html}
 <div class="card">
-<form method="post" action="/ask">
+<form method="post" action="{config.mount_path}/ask">
 <input type="hidden" name="csrf" value="{_escape(csrf)}">
 <input type="hidden" name="conversation_id" value="{_escape(conversation_id)}">
 <label for="q">Your question</label>
@@ -307,7 +308,7 @@ placeholder="Is dispatch halted? How many jobs are queued?"></textarea>
 </form>
 </div>
 {history}"""
-    return _page("Chat", body, actor=actor, csrf=csrf)
+    return _page("Chat", body, actor=actor, csrf=csrf, mount_path=config.mount_path)
 
 
 def render_turn(config: WebConfig, *, actor: str, turn: dict) -> str:
@@ -323,7 +324,7 @@ def render_turn(config: WebConfig, *, actor: str, turn: dict) -> str:
              + "".join(rows) + "</tbody></table>") if rows else (
         '<p class="empty">No receipts recorded for this turn.</p>')
     body = f"""<div class="card">
-<p class="sub"><a href="/">← back to chat</a></p>
+<p class="sub"><a href="{config.mount_path}/">← back to chat</a></p>
 <p class="q">{_escape(turn["question"])}</p>
 <p class="a">{_escape(turn.get("reply") or "(no reply)")}</p>
 <div class="meta"><span class="pill {_escape(turn["status"])}">{_escape(turn["status"])}</span>
@@ -397,6 +398,20 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
         self._cached_edge_claim = (actor, nonce)
         return self._cached_edge_claim
 
+    def _route_path(self) -> str:
+        path = urlsplit(self.path).path
+        mount = self.config.mount_path
+        if not mount:
+            return path
+        if not path.startswith(mount + "/"):
+            raise WebError("NOT_FOUND", 404)
+        if not self._edge_claim():
+            raise WebError("EDGE_ASSERTION_MISSING", 403)
+        route = path[len(mount):]
+        if route in {"/api/health", "/auth/callback", "/auth/exchange"}:
+            raise WebError("NOT_FOUND", 404)
+        return route
+
     def _allowed_host(self) -> bool:
         host = (self.headers.get("Host") or "").strip().lower()
         expected = {f"{self.config.host}:{self.config.port}",
@@ -406,14 +421,15 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
         return bool(edge) or host in expected
 
     def _send(self, status: int, body: str, *, content_type: str = "text/html; charset=utf-8",
-              headers: dict[str, str] | None = None) -> None:
+              headers: dict[str, str] | None = None, form_page: bool = False) -> None:
         payload = body.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Content-Security-Policy", CSP)
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Referrer-Policy", "no-referrer")
+        # With no-referrer, browsers can submit a same-origin form with Origin: null.
+        self.send_header("Referrer-Policy", "same-origin" if form_page else "no-referrer")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Cache-Control", "no-store")
         for key, value in (headers or {}).items():
@@ -453,7 +469,7 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
             self.config, actor=actor, assertion_nonce=nonce,
         )
         self._pending_edge_cookie = (
-            f"{SESSION_COOKIE}={session_id}; Path=/; HttpOnly; Secure; "
+            f"{SESSION_COOKIE}={session_id}; Path={self.config.mount_path}/; HttpOnly; Secure; "
             f"SameSite=Strict; Max-Age={SESSION_TTL_MS // 1000}"
         )
         return {"session_id": session_id, "actor": actor, "csrf_token": csrf,
@@ -468,9 +484,11 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
     def _check_origin(self) -> None:
         origin = self.headers.get("Origin")
         referer = self.headers.get("Referer")
+        if self.config.mount_path and origin != self.config.edge_public_origin:
+            raise WebError("ORIGIN_MISMATCH", 403)
         expected = {f"http://{self.config.host}:{self.config.port}"}
         if self._edge_claim():
-            expected.add(self.config.edge_public_origin)
+            expected = {self.config.edge_public_origin}
         for value in (origin, referer):
             if not value:
                 continue
@@ -503,7 +521,7 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
         try:
             if not self._allowed_host():
                 raise WebError("HOST_NOT_ALLOWED", 403)
-            path = urlsplit(self.path).path
+            path = self._route_path()
             if path == "/api/health":
                 return self._send(200, json.dumps({
                     "status": "ok", "service": "shards-agent-os",
@@ -519,7 +537,7 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
                 return self._send(200, render_home(
                     self.config, actor=session["actor"], csrf=session["csrf_token"],
                     conversation_id=conversation_id,
-                ))
+                ), form_page=True)
             if path.startswith("/turn/"):
                 turn_id = path[len("/turn/"):]
                 turn = agent_state.get_turn(
@@ -543,8 +561,8 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
         try:
             if not self._allowed_host():
                 raise WebError("HOST_NOT_ALLOWED", 403)
+            path = self._route_path()
             self._check_origin()
-            path = urlsplit(self.path).path
             if path == "/auth/exchange":
                 return self._auth_exchange()
             if path == "/logout":
@@ -553,8 +571,8 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
                 self._check_csrf(form, session)
                 _drop_session(self.config, session["session_id"])
                 return self._send(303, "", headers={
-                    "Location": "/",
-                    "Set-Cookie": f"{SESSION_COOKIE}=; Path=/; Max-Age=0; "
+                    "Location": self.config.mount_path + "/",
+                    "Set-Cookie": f"{SESSION_COOKIE}=; Path={self.config.mount_path}/; Max-Age=0; "
                                   "HttpOnly; SameSite=Strict",
                 })
             if path == "/ask":
@@ -637,8 +655,8 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
         ):
             return self._send(429, _page("Budget", (
                 '<div class="card notice">Request budget exhausted for this hour.</div>'
-                '<p class="sub"><a href="/">← back</a></p>'
-            ), actor=actor, csrf=session["csrf_token"]))
+                f'<p class="sub"><a href="{self.config.mount_path}/">← back</a></p>'
+            ), actor=actor, csrf=session["csrf_token"], mount_path=self.config.mount_path), form_page=True)
         try:
             run_turn(
                 self.config.db_path, actor=actor, conversation_id=conversation_id,
@@ -649,13 +667,15 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
         except LoopError as exc:
             return self._send(503, _page("Unavailable", (
                 f'<div class="card notice">{_escape(exc.code)}</div>'
-                '<p class="sub"><a href="/">← back</a></p>'
-            ), actor=actor, csrf=session["csrf_token"]))
-        self._send(303, "", headers={"Location": "/"})
+                f'<p class="sub"><a href="{self.config.mount_path}/">← back</a></p>'
+            ), actor=actor, csrf=session["csrf_token"], mount_path=self.config.mount_path), form_page=True)
+        self._send(303, "", headers={"Location": self.config.mount_path + "/"})
 
 
 def make_server(config: WebConfig) -> ThreadingHTTPServer:
     """Bind the loopback listener. Refuse any non-loopback host outright."""
+    if config.mount_path and (config.mount_path != "/agent-os" or not config.edge_public_origin):
+        raise WebError("INVALID_EDGE_MOUNT", 403)
     if config.host not in ("127.0.0.1", "::1", "localhost"):
         raise WebError("NON_LOOPBACK_BIND_REFUSED", 403)
     if config.provider.name == "fixture" and not config.allow_fixture:

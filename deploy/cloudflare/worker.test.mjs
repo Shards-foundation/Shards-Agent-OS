@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { test, before, beforeEach } from "node:test";
 import { webcrypto } from "node:crypto";
 
+import staging, { routeAgentOS } from "./agent-os.mjs";
 import worker, {
   _clearCertCache,
   handleChat,
@@ -544,5 +545,60 @@ test("an unauthenticated request never reaches the origin", async () => {
     assert.equal(called, false);
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test("Access validation requires the configured audience and exact team issuer", async () => {
+  for (const [payload, audience, code] of [
+    [{ iss: "https://another-team.cloudflareaccess.com" }, AUDIENCE, /JWT_ISSUER_INVALID/],
+    [{ aud: undefined }, undefined, /JWT_AUDIENCE_MISMATCH/],
+  ]) {
+    await assert.rejects(verifyAccessJwt(await makeToken({ payload }), {
+      teamDomain: TEAM_DOMAIN, audience, fetchImpl: certsFetcher([jwk]),
+    }), code);
+  }
+});
+
+test("the mount leaves all existing hub routes to the hub", async () => {
+  for (const path of ["/", "/api/chat", "/api/models", "/api/agents", "/api/agents/ask",
+                      "/api/health", "/agent-os-other"]) {
+    assert.equal(await routeAgentOS(request(path), ENV), null);
+    assert.equal((await staging.fetch(request(path), ENV)).status, 404);
+  }
+  assert.equal((await routeAgentOS(request("/agent-os/"), ENV)).status, 401);
+});
+
+test("the signed mount handles only the UI, receipt and form methods", async (t) => {
+  const headers = { "Cf-Access-Jwt-Assertion": await makeToken() };
+  const destinations = [];
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    if (url === `https://${TEAM_DOMAIN}/cdn-cgi/access/certs`) return certsFetcher([jwk])();
+    destinations.push([url, init.method]);
+    assert.equal(init.headers.get("X-Shards-Actor"), "owner@example.test");
+    return new Response(null, { status: 200 });
+  });
+  const receipt = "/agent-os/turn/" + "a".repeat(32);
+  const redirect = await staging.fetch(request("/agent-os", { headers }), ENV);
+  assert.equal(redirect.headers.get("location"), "/agent-os/");
+  for (const [path, method, expected] of [
+    ["/agent-os/", "GET", 200], [receipt, "GET", 200],
+    ["/agent-os/ask", "POST", 200], ["/agent-os/logout", "POST", 200],
+    ["/agent-os/ask", "GET", 405], ["/agent-os/turn/missing", "GET", 404],
+    ["/agent-os/auth/exchange", "POST", 404], ["/agent-os/auth/callback", "GET", 404],
+  ]) {
+    const res = await staging.fetch(request(path, { headers, method }), ENV);
+    assert.equal(res.status, expected);
+  }
+  assert.deepEqual(destinations, [
+    [ORIGIN_BASE + "/agent-os/", "GET"], [ORIGIN_BASE + receipt, "GET"],
+    [ORIGIN_BASE + "/agent-os/ask", "POST"], [ORIGIN_BASE + "/agent-os/logout", "POST"],
+  ]);
+});
+
+test("form pages keep the same-origin referrer policy through the proxy", async () => {
+  for (const [upstream, expected] of [["same-origin", "same-origin"], ["unsafe-url", "no-referrer"]]) {
+    const response = await proxyToOrigin(request("/agent-os/"), ENV, "owner@example.test",
+      async () => new Response("form", { headers: { "Referrer-Policy": upstream } }));
+    assert.equal(response.headers.get("Referrer-Policy"), expected);
   }
 });

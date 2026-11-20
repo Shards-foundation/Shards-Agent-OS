@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import re
 import secrets
 import threading
 import time
@@ -283,6 +284,49 @@ class EdgeProxyTests(ServerTestCase):
         self.assertIn("Secure", cookie)
         self.assertIn("SameSite=Strict", cookie)
         self.assertIn("Max-Age=28800", cookie)
+
+    def test_hub_mount_requires_edge_and_scopes_the_entire_session(self):
+        self.config.mount_path = "/agent-os"
+        path = "/agent-os/"
+        self.assertEqual(self.request("GET", "/")[0], 404)
+        self.assertEqual(self.request("GET", path)[0], 403)
+        status, headers, page = self.request("GET", path, headers=self.edge_headers())
+        self.assertEqual(status, 200)
+        self.assertIn("Path=/agent-os/;", headers["Set-Cookie"])
+        self.assertEqual(headers["Referrer-Policy"], "same-origin")
+        self.assertIn('action="/agent-os/ask"', page)
+        self.assertIn('action="/agent-os/logout"', page)
+        cookie = headers["Set-Cookie"].split(";", 1)[0]
+        self.assertEqual(self.request("GET", path, headers={"Cookie": cookie})[0], 403)
+        csrf = re.search(r'name="csrf" value="([^"]+)"', page).group(1)
+        conversation = re.search(r'name="conversation_id" value="([^"]+)"', page).group(1)
+
+        def signed_headers():
+            return {**self.edge_headers(), "Cookie": cookie, "Origin": self.config.edge_public_origin}
+
+        body = urlencode({"csrf": csrf, "conversation_id": conversation, "question": "Hello"})
+        unsigned_origin = signed_headers()
+        del unsigned_origin["Origin"]
+        self.assertEqual(self.request("POST", path + "ask", body=body, headers=unsigned_origin)[0], 403)
+        for origin in ("null", f"http://127.0.0.1:{self.port}"):
+            status, _, _ = self.request("POST", path + "ask", body=body,
+                                        headers={**signed_headers(), "Origin": origin})
+            self.assertEqual(status, 403)
+        status, headers, _ = self.request("POST", path + "ask", body=body, headers=signed_headers())
+        self.assertEqual(status, 303)
+        self.assertEqual(headers["Location"], path)
+        _, _, page = self.request("GET", path, headers=signed_headers())
+        receipt = re.search(r'href="(/agent-os/turn/[a-f0-9]{32})"', page).group(1)
+        status, _, detail = self.request("GET", receipt, headers=signed_headers())
+        self.assertEqual(status, 200)
+        self.assertIn('href="/agent-os/"', detail)
+        status, headers, _ = self.request("POST", path + "logout", body=urlencode({"csrf": csrf}),
+                                          headers=signed_headers())
+        self.assertEqual(status, 303)
+        self.assertIn("Path=/agent-os/; Max-Age=0", headers["Set-Cookie"])
+        self.assertEqual(headers["Location"], path)
+        for method, route in [("GET", "auth/callback"), ("POST", "auth/exchange")]:
+            self.assertEqual(self.request(method, path + route, headers=signed_headers())[0], 404)
 
     def test_edge_state_is_reset_on_one_keepalive_connection(self):
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=20)

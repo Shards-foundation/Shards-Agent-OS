@@ -73,6 +73,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--port", type=int, default=12000)
     parser.add_argument("--edge-public-origin", default=None,
                         help="Explicit HTTPS browser origin trusted behind a signed edge")
+    parser.add_argument("--mount-path", choices=("/agent-os",), default="",
+                        help="Serve the hub UI under this path and require signed edge requests")
     parser.add_argument("--allow-fixture-provider", action="store_true",
                         help="Unit-test only; never evidence of real inference")
     _add_provider_arguments(parser)
@@ -97,7 +99,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             edge_secret=_secret_from_env(args.edge_secret_env),
             host=args.host, port=args.port,
             allow_fixture=args.allow_fixture_provider,
-            edge_public_origin=args.edge_public_origin,
+            edge_public_origin=args.edge_public_origin, mount_path=args.mount_path,
         )
         server = make_server(config)
     except (WebError, ValueError, OSError) as exc:
