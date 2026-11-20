@@ -97,6 +97,23 @@ def pins(directory, roles):
     return keys
 
 
+def expected_unit_fields(file, *, accepting_grant):
+    return {"ActiveState": "active" if accepting_grant else "inactive",
+            "UnitFileState": "disabled", "FragmentPath": str(file),
+            "DropInPaths": "", "NeedDaemonReload": "no"}
+
+
+def verify_audit_state(path, kernel, *, accepting_grant):
+    if accepting_grant:
+        audit_info = path.lstat()
+        require(stat.S_ISREG(audit_info.st_mode) and audit_info.st_uid == kernel.pw_uid
+                and audit_info.st_gid == kernel.pw_gid
+                and not stat.S_IMODE(audit_info.st_mode) & 0o077,
+                "Live grant import requires the existing private Kernel audit ledger")
+    else:
+        require(not os.path.lexists(path), "First commissioning requires an unused staging audit path")
+
+
 def host_preflight(*, accepting_grant=False):
     require(os.geteuid() == 0, "Use the staging host administrator session")
     release = platform.freedesktop_os_release()
@@ -121,21 +138,11 @@ def host_preflight(*, accepting_grant=False):
         fields = subprocess.check_output(["systemctl", "show", name, "-p", "ActiveState",
             "-p", "UnitFileState", "-p", "FragmentPath", "-p", "DropInPaths", "-p", "NeedDaemonReload"], text=True)
         require(dict(line.split("=", 1) for line in fields.splitlines()) ==
-                {"ActiveState": "active" if accepting_grant else "inactive",
-                 "UnitFileState": "disabled", "FragmentPath": str(file),
-                 "DropInPaths": "", "NeedDaemonReload": "no"},
+                expected_unit_fields(file, accepting_grant=accepting_grant),
                 "Expected verified staging unit state for this operation")
     subprocess.run(["systemd-analyze", "verify", *(str(Path("/etc/systemd/system", name + ".service"))
                     for name in ("shards-stage-origin", "shards-stage-kernel"))], check=True)
-    if accepting_grant:
-        audit_info = AUDIT.lstat()
-        kernel = accounts[0]
-        require(stat.S_ISREG(audit_info.st_mode) and audit_info.st_uid == kernel.pw_uid
-                and audit_info.st_gid == kernel.pw_gid
-                and not stat.S_IMODE(audit_info.st_mode) & 0o077,
-                "Live grant import requires the existing private Kernel audit ledger")
-    else:
-        require(not os.path.lexists(AUDIT), "First commissioning requires an unused staging audit path")
+    verify_audit_state(AUDIT, accounts[0], accepting_grant=accepting_grant)
     parent = CONFIG.lstat()
     require(stat.S_ISDIR(parent.st_mode) and parent.st_uid == 0 and not parent.st_mode & 0o022,
             "Untrusted staging configuration directory")
