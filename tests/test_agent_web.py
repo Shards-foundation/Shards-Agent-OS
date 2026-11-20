@@ -284,6 +284,38 @@ class EdgeProxyTests(ServerTestCase):
         self.assertIn("SameSite=Strict", cookie)
         self.assertIn("Max-Age=28800", cookie)
 
+    def test_edge_state_is_reset_on_one_keepalive_connection(self):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=20)
+        try:
+            conn.request("GET", "/", headers=self.edge_headers(actor=ACTOR))
+            first = conn.getresponse()
+            first_body = first.read().decode()
+            first_cookie = first.getheader("Set-Cookie")
+            self.assertEqual(first.status, 200)
+            self.assertIn(ACTOR, first_body)
+            self.assertIsNotNone(first_cookie)
+
+            # The same socket must not inherit the previous request's cookie.
+            conn.request("GET", "/api/health")
+            health = conn.getresponse()
+            health.read()
+            self.assertEqual(health.status, 200)
+            self.assertIsNone(health.getheader("Set-Cookie"))
+
+            # Nor may the next actor inherit the first actor's signed claim.
+            second_actor = "other@example.test"
+            conn.request("GET", "/", headers=self.edge_headers(actor=second_actor))
+            second = conn.getresponse()
+            second_body = second.read().decode()
+            second_cookie = second.getheader("Set-Cookie")
+            self.assertEqual(second.status, 200)
+            self.assertIn(second_actor, second_body)
+            self.assertNotIn(ACTOR, second_body)
+            self.assertIsNotNone(second_cookie)
+            self.assertNotEqual(first_cookie, second_cookie)
+        finally:
+            conn.close()
+
     def test_edge_actor_mismatch_rejects_existing_cookie(self):
         session = self.sign_in()
         headers = self.edge_headers(actor="attacker@example.test")
