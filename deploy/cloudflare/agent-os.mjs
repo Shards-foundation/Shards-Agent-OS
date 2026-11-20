@@ -1,7 +1,7 @@
 // Return null for routes owned by the hub. Never fall through inside the mount.
 import { proxyToOrigin, readActor } from "./worker.mjs";
 
-export async function routeAgentOS(request, env) {
+export async function routeAgentOS(request, env, originFetch = fetch) {
   const path = new URL(request.url).pathname;
   if (path !== "/agent-os" && !path.startsWith("/agent-os/")) return null;
   try {
@@ -16,7 +16,7 @@ export async function routeAgentOS(request, env) {
     if (page ? !["GET", "HEAD"].includes(request.method) : request.method !== "POST") {
       return new Response(null, { status: 405, headers: { Allow: allow } });
     }
-    return await proxyToOrigin(request, env, actor);
+    return await proxyToOrigin(request, env, actor, originFetch);
   } catch (error) {
     const status = error.message === "NO_ACCESS_JWT" ? 401 :
       error.message === "BODY_TOO_LARGE" ? 413 : 403;

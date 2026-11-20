@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { test, before, beforeEach } from "node:test";
 import { webcrypto } from "node:crypto";
 
+import oracleStage from "../oracle/edge.mjs";
 import staging, { routeAgentOS } from "./agent-os.mjs";
 import worker, {
   _clearCertCache,
@@ -601,4 +602,35 @@ test("form pages keep the same-origin referrer policy through the proxy", async 
       async () => new Response("form", { headers: { "Referrer-Policy": upstream } }));
     assert.equal(response.headers.get("Referrer-Policy"), expected);
   }
+});
+
+test("Oracle staging requires the private origin binding", async (t) => {
+  t.mock.method(globalThis, "fetch", () => assert.fail("unexpected network request"));
+  assert.equal((await oracleStage.fetch(request("/agent-os/"), ENV)).status, 503);
+});
+
+test("Oracle staging sends signed requests exclusively over its VPC binding", async (t) => {
+  const token = await makeToken();
+  t.mock.method(globalThis, "fetch", async (url) => {
+    assert.equal(url, `https://${TEAM_DOMAIN}/cdn-cgi/access/certs`);
+    return certsFetcher([jwk])();
+  });
+  let calls = 0;
+  const binding = { async fetch(url, init) {
+    calls++;
+    assert.equal(url, ORIGIN_BASE + "/agent-os/");
+    assert.equal(init.redirect, "manual");
+    assert.equal(init.headers.get("X-Shards-Actor"), "owner@example.test");
+    assert.ok(init.headers.has("X-Shards-Assertion"));
+    assert.equal(init.headers.has("Cf-Access-Jwt-Assertion"), false);
+    return new Response("origin");
+  } };
+  const env = { ...ENV, AGENT_OS_ORIGIN: binding };
+  assert.equal((await oracleStage.fetch(request("/agent-os/"), env)).status, 401);
+  assert.equal((await oracleStage.fetch(request("/api/agents"), env)).status, 404);
+  const signed = request("/agent-os/", { headers: { "Cf-Access-Jwt-Assertion": token } });
+  assert.equal(await (await oracleStage.fetch(signed, env)).text(), "origin");
+  binding.fetch = async () => { throw new Error("private service unavailable"); };
+  assert.equal((await oracleStage.fetch(signed, env)).status, 403);
+  assert.equal(calls, 1);
 });

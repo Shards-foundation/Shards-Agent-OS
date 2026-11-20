@@ -130,14 +130,9 @@ def write_private_json(path: str, payload: dict) -> str:
     return path
 
 
-def start_signed_kernel(root: Path, *, agents: list[dict], tools: list[str],
-                        port: int | None = None):
-    """Start a real signed Shards-Kernel operator. Returns (proc, port, ctx).
-
-    The kernel's signed policy requires at least two distinct agent identities,
-    so a second, unused identity is always enrolled. It has no token in the
-    environment and cannot be assumed by the caller.
-    """
+def write_signed_kernel_policy(root: Path, *, agents: list[dict], tools: list[str],
+                               port: int, audit_db: Path):
+    """Prepare a signed test policy and its operator-only environment."""
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     from shards_kernel.integrations.auth import agent_token_kdf
     from shards_kernel.issuer import sign_operator_policy
@@ -152,7 +147,6 @@ def start_signed_kernel(root: Path, *, agents: list[dict], tools: list[str],
     issuer = Ed25519PrivateKey.generate()
     policy_issuer = Ed25519PrivateKey.generate()
     pepper = secrets.token_urlsafe(48)
-    port = port or free_port()
     now = int(time.time() * 1000)
     policy = {
         "version": 2, "kernel_id": AUDIENCE, "tools": tools,
@@ -167,20 +161,35 @@ def start_signed_kernel(root: Path, *, agents: list[dict], tools: list[str],
             "public_key_hex": issuer.public_key().public_bytes_raw().hex(),
             "revoked": False,
         }],
-        "audit_db": str(root / "kernel_audit.sqlite3"),
+        "audit_db": str(audit_db),
         "port": port,
     }
     signed = sign_operator_policy(policy, policy_issuer, revision=1,
                                   issued_at_ms=now - 60_000, expires_at_ms=now + 900_000)
     policy_file = root / "signed-operator.json"
     policy_file.write_text(json.dumps(signed))
-    env = os.environ.copy()
-    env.update({
+    env = {
         "SHARDS_KERNEL_API_KEY": secrets.token_urlsafe(48),
         "SHARDS_KERNEL_AGENT_AUTH_PEPPER": pepper,
         "SHARDS_KERNEL_POLICY_PUBLIC_KEY_HEX":
             policy_issuer.public_key().public_bytes_raw().hex(),
-    })
+    }
+    return policy_file, env, {"issuer": issuer, "policy_issuer": policy_issuer}
+
+
+def start_signed_kernel(root: Path, *, agents: list[dict], tools: list[str],
+                        port: int | None = None):
+    """Start a real signed Shards-Kernel operator. Returns (proc, port, ctx).
+
+    The kernel's signed policy requires at least two distinct agent identities,
+    so a second, unused identity is always enrolled. It has no token in the
+    environment and cannot be assumed by the caller.
+    """
+    port = port or free_port()
+    policy_file, operator_env, ctx = write_signed_kernel_policy(
+        root, agents=agents, tools=tools, port=port, audit_db=root / "kernel_audit.sqlite3",
+    )
+    env = {**os.environ, **operator_env}
     import subprocess
     import sys
 
@@ -203,7 +212,7 @@ def start_signed_kernel(root: Path, *, agents: list[dict], tools: list[str],
     if not healthy:
         proc.terminate()
         raise RuntimeError("Signed kernel operator did not become healthy")
-    return proc, port, {"issuer": issuer, "policy_issuer": policy_issuer}
+    return proc, port, ctx
 
 
 def issue_echo_permit(root: Path, ctx, *, text: str, subject: str,
