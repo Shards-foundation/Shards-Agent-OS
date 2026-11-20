@@ -152,7 +152,7 @@ def _kernel_dispatch(db_path: str, *, spec: agent_tools.ToolSpec, arguments: dic
         arguments=kernel_arguments, permit_file=permit_file, now_ms=now,
     )
     try:
-        outcome = run_once(db_path, now_ms=now, timeout_s=TOOL_TIMEOUT_S)
+        outcome = run_once(db_path, job_id=job_id, now_ms=now, timeout_s=TOOL_TIMEOUT_S)
     except Exception:
         # The job may already have reached the kernel operator. Its id is
         # preserved so an operator can reconcile it; it is never retried here.

@@ -60,12 +60,20 @@ def ready():
 
 def call_kernel(token, permit):
     result = subprocess.run([
-        "runuser", "-u", "shards-stage-web", "--", PYTHON, "-I", "-m", "shards_kernel",
+        "/usr/sbin/runuser", "-u", "shards-stage-web", "--", PYTHON, "-I", "-m", "shards_kernel",
         "mcp-call", "--port", "18765", "--tool", "echo",
         "--arguments-json", '{"text":"arm64-stage"}', "--permit-file", str(permit),
     ], env={"PATH": os.defpath, "SHARDS_KERNEL_AGENT_TOKEN": token},
         capture_output=True, text=True, timeout=25)
     return result.returncode, json.loads(result.stdout)
+
+
+def allowed_audit_entries(request_id):
+    with sqlite3.connect(f"file:{KERNEL_STATE}?mode=ro", uri=True) as conn:
+        return conn.execute(
+            "SELECT ledger_seq, entry_hash FROM audit_entries WHERE kernel_id=? "
+            "AND request_id=? AND decision='ALLOW' ORDER BY ledger_seq", (AUDIENCE, request_id)
+        ).fetchall()
 
 
 def env_file(path, settings):
@@ -140,6 +148,15 @@ def check_services():
         code, receipt = call_kernel(token, permit)
         assert code == 0 and receipt["decision"] == "ALLOW" and receipt["result"] == "arm64-stage"
 
+        allowed_request = receipt["request_id"]
+        entries_before_restart = allowed_audit_entries(allowed_request)
+        assert entries_before_restart
+        old_pid = subprocess.check_output(
+            ["systemctl", "show", UNITS[1], "-p", "MainPID", "--value"], text=True).strip()
+        subprocess.run(["systemctl", "kill", "--kill-whom=main", "--signal=SIGKILL", UNITS[1]], check=True)
+        ready()
+        assert subprocess.check_output(
+            ["systemctl", "show", UNITS[1], "-p", "MainPID", "--value"], text=True).strip() != old_pid
         subprocess.run(["systemctl", "restart", *UNITS], check=True)
         ready()
         status, _, page = request(12026, "/agent-os/", used)
@@ -149,9 +166,10 @@ def check_services():
         assert status == 200 and new_cookie is None
         code, receipt = call_kernel(token, permit)
         assert code == 2 and receipt["decision"] == "DENY"
+        assert allowed_audit_entries(allowed_request) == entries_before_restart
         with sqlite3.connect(f"file:{WEB_STATE}?mode=ro", uri=True) as conn:
             assert conn.execute("select count(*) from agent_sessions").fetchone()[0] == 1
-        print("ARM64 systemd PASS: loopback, role isolation, signed echo, restart, session and replay")
+        print("ARM64 systemd PASS: loopback, role isolation, signed echo, crash recovery, persistent audit, session and replay")
     finally:
         subprocess.run(["systemctl", "stop", *reversed(UNITS)], check=True)
 

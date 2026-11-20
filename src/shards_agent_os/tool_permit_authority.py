@@ -274,7 +274,7 @@ def issue_delegation(
         "delegation_id": secrets.token_hex(16),
         "audience": audience, "actor": actor, "tools": list(tools),
         "max_executions": max_executions,
-        "valid_from_ms": issued - 30_000,
+        "valid_from_ms": issued,
         "valid_until_ms": issued + ttl_seconds * 1000,
         "issued_at_ms": issued,
     }
@@ -319,7 +319,7 @@ def issue_kernel_bundle(
         "audience": audience, "actor": actor, "tool": tool,
         "arguments_sha256": arguments_digest(tool, arguments),
         "permit_file": permit_file, "max_executions": 1,
-        "valid_from_ms": issued - 30_000,
+        "valid_from_ms": issued,
         "valid_until_ms": issued + ttl_seconds * 1000,
         "issued_at_ms": issued,
     }

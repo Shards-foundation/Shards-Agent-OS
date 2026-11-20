@@ -36,6 +36,10 @@ class AuthorityDocumentTests(unittest.TestCase):
         self.assertEqual(payload["actor"], ACTOR)
         self.assertEqual(set(payload["tools"]), {"os.queue_summary", "os.halt_state"})
 
+    def test_maximum_delegation_lifetime_verifies(self):
+        _, doc = self._delegation_doc(ttl_seconds=90 * 24 * 3600)
+        verify_delegation(doc, public_key_hex=self.public, audience=AUDIENCE, actor=ACTOR)
+
     def test_delegation_refuses_a_different_actor(self):
         _, document = self._delegation_doc()
         with self.assertRaises(AuthorityError) as caught:
@@ -238,6 +242,13 @@ class KernelBundleTests(unittest.TestCase):
 
     def tearDown(self):
         self.ws.close()
+
+    def test_maximum_bundle_lifetime_verifies(self):
+        path = str(self.ws.root / "max.json")
+        scope = dict(audience=AUDIENCE, actor=ACTOR, tool="kernel.echo", arguments={"text": "hello"})
+        issue_kernel_bundle(private_key_path=self.ws.authority_private, passphrase=self.ws.passphrase,
+                            output_path=path, permit_file=self.permit, ttl_seconds=3600, **scope)
+        verify_kernel_bundle(load_signed_document(path), public_key_hex=self.public, **scope)
 
     def test_bundle_binds_exact_tool_and_arguments(self):
         path = self.ws.bundle(tool="kernel.echo", arguments={"text": "hello"},

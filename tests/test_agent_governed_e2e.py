@@ -102,7 +102,13 @@ class GovernedKernelExecutionTests(unittest.TestCase):
         self.assertEqual(result_receipt["payload"]["result"], "governed-hello")
         self.assertIn("governed-hello", turn["reply"])
 
-    def test_real_signed_kernel_add_returns_arithmetic(self):
+    def test_real_signed_kernel_add_claims_its_own_job(self):
+        from shards_agent_os.scheduler import enqueue, list_jobs
+
+        older = enqueue(
+            self.ws.db_path, run_at_ms=1, now_ms=1, port=self.port, tool="echo",
+            arguments={"text": "older"}, permit_file=str(self.ws.root / "other-permit.json"),
+        )
         permit = issue_add_permit(self.ws.root, self.ctx, a=17, b=25,
                                   subject="agent-os-web")
         arguments = {"a": 17, "b": 25}
@@ -113,6 +119,9 @@ class GovernedKernelExecutionTests(unittest.TestCase):
         })
         provider = ScriptedProvider(decision("Adding.", "kernel.add", arguments))
         turn = self._turn(provider, authority)
+        jobs = {job["job_id"]: job["status"] for job in list_jobs(self.ws.db_path)}
+        self.assertEqual(jobs[older], "PENDING")
+        self.assertEqual(jobs[turn["job_id"]], "SUCCEEDED")
         self.assertEqual(turn["status"], "SUCCEEDED", turn)
         self.assertEqual(
             [r for r in turn["receipts"] if r["kind"] == "tool.result"][0]
