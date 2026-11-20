@@ -307,10 +307,16 @@ export async function proxyToOrigin(
   // Never forward the browser's Access JWT: the origin does not understand it
   // and it is a bearer credential for a different audience.
   const headers = new Headers();
-  for (const name of ["content-type", "cookie", "accept", "origin", "referer"]) {
+  for (const name of ["content-type", "accept", "origin", "referer"]) {
     const value = request.headers.get(name);
     if (value) headers.set(name, value);
   }
+  // Cloudflare Access cookies are credentials for a different trust domain.
+  // Only the opaque Agent OS session cookie belongs at the origin.
+  const agentCookie = (request.headers.get("cookie") || "").split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith("shards_agent_session="));
+  if (agentCookie) headers.set("cookie", agentCookie);
   headers.set("X-Shards-Actor", actor);
   headers.set("X-Shards-Assertion", `${nonce}.${tsMs}.${signature}`);
   headers.set("X-Forwarded-Host", target.host);
