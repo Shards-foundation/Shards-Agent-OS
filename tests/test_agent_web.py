@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import secrets
 import threading
 import time
 import unittest
@@ -67,7 +68,7 @@ class ServerTestCase(unittest.TestCase):
             connection.close()
 
     def sign_in(self, actor: str = ACTOR) -> dict:
-        nonce = "nonce-" + str(int(time.time() * 1000))
+        nonce = "nonce-" + secrets.token_hex(12)
         ts = int(time.time() * 1000)
         signature = sign_assertion(EDGE_SECRET, actor=actor, nonce=nonce, ts_ms=ts)
         query = urlencode({"actor": actor, "nonce": nonce, "ts": ts, "sig": signature})
@@ -201,6 +202,8 @@ class IdentityTests(ServerTestCase):
         cookie = headers["Set-Cookie"]
         self.assertIn("HttpOnly", cookie)
         self.assertIn("SameSite=Strict", cookie)
+        self.assertIn("Max-Age=28800", cookie)
+        self.assertNotIn("{SESSION_TTL_MS", cookie)
         self.assertNotIn("edge", cookie.lower())
         self.assertNotIn("token", cookie.lower())
 
@@ -222,6 +225,113 @@ class IdentityTests(ServerTestCase):
         self.assertIn("Max-Age=0", headers["Set-Cookie"])
         status, _, _ = self.request("GET", "/", session=session)
         self.assertEqual(status, 401)
+
+
+class AssertionReplayTests(ServerTestCase):
+    def test_callback_assertion_is_single_use(self):
+        ts = int(time.time() * 1000)
+        nonce = "nonce-" + secrets.token_hex(12)
+        signature = sign_assertion(EDGE_SECRET, actor=ACTOR, nonce=nonce, ts_ms=ts)
+        query = urlencode({"actor": ACTOR, "nonce": nonce, "ts": ts, "sig": signature})
+        self.assertEqual(self.request("GET", f"/auth/callback?{query}")[0], 303)
+        status, _, body = self.request("GET", f"/auth/callback?{query}")
+        self.assertEqual(status, 403)
+        self.assertIn("ASSERTION_REPLAYED", body)
+
+    def test_json_exchange_assertion_is_single_use(self):
+        ts = int(time.time() * 1000)
+        nonce = "nonce-" + secrets.token_hex(12)
+        body = json.dumps({"actor": ACTOR, "nonce": nonce, "ts": ts,
+                           "sig": sign_assertion(
+                               EDGE_SECRET, actor=ACTOR, nonce=nonce, ts_ms=ts)})
+        headers = {"Content-Type": "application/json",
+                   "Content-Length": str(len(body))}
+        self.assertEqual(self.request("POST", "/auth/exchange", body=body,
+                                      headers=headers)[0], 200)
+        status, _, response = self.request("POST", "/auth/exchange",
+                                           body=body, headers=headers)
+        self.assertEqual(status, 403)
+        self.assertIn("ASSERTION_REPLAYED", response)
+
+
+class EdgeProxyTests(ServerTestCase):
+    def setUp(self):
+        super().setUp()
+        self.config.edge_public_origin = "https://agents.shardsinc.co.uk"
+
+    def edge_headers(self, actor=ACTOR, nonce=None):
+        nonce = nonce or "nonce-" + secrets.token_hex(12)
+        ts = int(time.time() * 1000)
+        return {
+            "Host": "origin.internal.example",
+            "X-Forwarded-Host": "agents.shardsinc.co.uk",
+            "X-Shards-Actor": actor,
+            "X-Shards-Assertion": (
+                f"{nonce}.{ts}."
+                f"{sign_assertion(EDGE_SECRET, actor=actor, nonce=nonce, ts_ms=ts)}"
+            ),
+        }
+
+    def test_edge_signed_get_bootstraps_session(self):
+        status, headers, page = self.request(
+            "GET", "/", headers=self.edge_headers(),
+        )
+        self.assertEqual(status, 200)
+        self.assertIn("signed in as", page)
+        cookie = headers["Set-Cookie"]
+        self.assertIn("HttpOnly", cookie)
+        self.assertIn("Secure", cookie)
+        self.assertIn("SameSite=Strict", cookie)
+        self.assertIn("Max-Age=28800", cookie)
+
+    def test_edge_actor_mismatch_rejects_existing_cookie(self):
+        session = self.sign_in()
+        headers = self.edge_headers(actor="attacker@example.test")
+        status, _, body = self.request("GET", "/", session=session, headers=headers)
+        self.assertEqual(status, 403)
+        self.assertIn("EDGE_ACTOR_MISMATCH", body)
+
+    def test_edge_assertion_replay_is_refused(self):
+        headers = self.edge_headers()
+        self.assertEqual(self.request("GET", "/", headers=headers)[0], 200)
+        status, _, body = self.request("GET", "/", headers=headers)
+        self.assertEqual(status, 403)
+        self.assertIn("ASSERTION_REPLAYED", body)
+
+    def test_edge_bogus_signature_is_refused(self):
+        headers = self.edge_headers()
+        nonce, ts, _ = headers["X-Shards-Assertion"].split(".")
+        headers["X-Shards-Assertion"] = f"{nonce}.{ts}.{'0' * 64}"
+        status, _, body = self.request("GET", "/", headers=headers)
+        self.assertEqual(status, 403)
+        self.assertIn("ASSERTION_INVALID", body)
+
+    def test_edge_requires_explicit_trusted_public_origin(self):
+        self.config.edge_public_origin = None
+        status, _, body = self.request("GET", "/", headers=self.edge_headers())
+        self.assertEqual(status, 403)
+        self.assertIn("EDGE_NOT_CONFIGURED", body)
+
+    def test_edge_rejects_unexpected_forwarded_host(self):
+        headers = self.edge_headers()
+        headers["X-Forwarded-Host"] = "evil.example"
+        status, _, body = self.request("GET", "/", headers=headers)
+        self.assertEqual(status, 403)
+        self.assertIn("EDGE_HOST_INVALID", body)
+
+    def test_edge_enforces_browser_origin_on_write(self):
+        session = self.sign_in()
+        body = urlencode({"csrf": session["csrf"], "conversation_id": "0" * 32,
+                          "question": "test"})
+        headers = self.edge_headers()
+        headers["Origin"] = "https://evil.example"
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
+        headers["Content-Length"] = str(len(body))
+        status, _, page = self.request(
+            "POST", "/ask", body=body, headers=headers, session=session,
+        )
+        self.assertEqual(status, 403)
+        self.assertIn("ORIGIN_MISMATCH", page)
 
 
 class CsrfAndOriginTests(ServerTestCase):
