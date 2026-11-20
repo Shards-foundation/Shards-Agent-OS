@@ -165,14 +165,16 @@ class WorkersAIProvider:
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            # Qwen 3.8's REST contract is Chat Completions, with reasoning
-            # tokens counted in the completion budget. Keep the generation
-            # bounded and prefer a short reasoning pass for small questions.
-            "max_completion_tokens": self.max_tokens,
-            "reasoning_effort": "low",
             "stream": False,
             "temperature": 0.1,
         }
+        if self.model == "@cf/qwen/qwen3.8-27b":
+            # Chat Completions: reasoning tokens share the output budget.
+            payload["max_completion_tokens"] = self.max_tokens
+            payload["reasoning_effort"] = "low"
+        else:
+            # Earlier Qwen Workers AI REST schemas accept max_tokens.
+            payload["max_tokens"] = self.max_tokens
         url = f"{self.base_url}/accounts/{self.account_id}/ai/run/{self.model}"
         started = time.monotonic()
         decoded = _post_json(
@@ -199,7 +201,9 @@ class WorkersAIProvider:
                 raise ProviderError("PROVIDER_UNSUPPORTED_TOOL_CALL")
             text = _extract_text(message)
         else:
-            # Retain compatibility with legacy Workers AI response envelopes.
+            # Retain legacy response envelopes without dropping their budget.
+            if type(result) is dict and result.get("finish_reason") == "length":
+                raise ProviderError("PROVIDER_INCOMPLETE_REPLY")
             text = _extract_text(result)
         return ModelReply(
             text=text, provider=self.name, model=self.model,
