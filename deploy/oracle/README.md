@@ -41,6 +41,8 @@ Once the staging host, signed policy and credentials have been verified, start `
 
 ## Private ingress
 
+For the existing Oracle staging tunnel, use the [private HTTPS installation, checks, rollback and Cloudflare handoff](https/README.md).
+
 Use an isolated Access application and staging hostname for the browser. The Oracle-specific Worker verifies its Access JWT and forwards only mounted Agent OS requests over a Workers VPC service binding named `AGENT_OS_ORIGIN`. A missing binding returns 503. A failed private request never retries over public fetch. The VM's connector makes an outbound tunnel connection. It needs no public DNS record for the origin and no inbound OCI rule for the two service ports.
 
 Bind the VPC service to an approved private HTTPS listener reachable by that tunnel. Use full certificate verification, the matching internal hostname and the appropriate trusted CA. The TLS terminator forwards only `/agent-os/` to the loopback web port, preserving the signed headers, browser Origin, cookies and redirect responses. The kernel port stays local. Set `ORIGIN_BASE_URL` to that internal HTTPS origin. The staging Worker also needs `ACCESS_TEAM_DOMAIN`, the staging `ACCESS_AUD` and `ORIGIN_ASSERTION_SECRET` matching the origin. The Python origin uses Workers AI by REST with its own scoped credential. The production AI and MCP bindings are independent.

@@ -1,0 +1,32 @@
+[Unit]
+Description=Private HTTPS terminator for the Shards staging origin
+
+[Service]
+Type=exec
+DynamicUser=yes
+RuntimeDirectory=shards-stage-https
+RuntimeDirectoryMode=0700
+UMask=0077
+LoadCredential=tls.key:/etc/shards-stage-https/tls.key
+LoadCredential=leaf.pem:/etc/shards-stage-https/leaf.pem
+ExecStartPre=/usr/sbin/apache2 -d /run/shards-stage-https -f /etc/shards-stage-https/httpd.conf -t
+ExecStart=/usr/sbin/apache2 -d /run/shards-stage-https -f /etc/shards-stage-https/httpd.conf -DFOREGROUND
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_UNIX
+IPAddressDeny=any
+IPAddressAllow=localhost
+SocketBindDeny=any
+SocketBindAllow=ipv4:tcp:18443
+
+[Install]
+WantedBy=multi-user.target
