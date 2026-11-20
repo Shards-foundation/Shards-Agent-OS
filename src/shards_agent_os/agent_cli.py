@@ -71,6 +71,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="Env var name holding the shared edge assertion secret")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=12000)
+    parser.add_argument("--edge-public-origin", default=None,
+                        help="Explicit HTTPS browser origin trusted behind a signed edge")
     parser.add_argument("--allow-fixture-provider", action="store_true",
                         help="Unit-test only; never evidence of real inference")
     _add_provider_arguments(parser)
@@ -95,6 +97,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             edge_secret=_secret_from_env(args.edge_secret_env),
             host=args.host, port=args.port,
             allow_fixture=args.allow_fixture_provider,
+            edge_public_origin=args.edge_public_origin,
         )
         server = make_server(config)
     except (WebError, ValueError, OSError) as exc:
