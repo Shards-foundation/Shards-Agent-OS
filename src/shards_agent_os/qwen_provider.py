@@ -110,7 +110,15 @@ def _post_json(url: str, payload: dict, headers: dict[str, str], timeout_s: floa
     except urllib.error.HTTPError as exc:
         # Never surface the response body: it can echo request content.
         raise ProviderError(f"PROVIDER_HTTP_{int(exc.code)}") from None
-    except (urllib.error.URLError, TimeoutError, OSError):
+    except urllib.error.URLError as exc:
+        # urllib wraps connect and read timeouts in URLError, so an elapsed
+        # deadline must not be reported as a network outage.
+        if isinstance(exc.reason, TimeoutError):
+            raise ProviderError("PROVIDER_TIMEOUT") from None
+        raise ProviderError("PROVIDER_UNREACHABLE") from None
+    except TimeoutError:
+        raise ProviderError("PROVIDER_TIMEOUT") from None
+    except OSError:
         raise ProviderError("PROVIDER_UNREACHABLE") from None
     if len(raw) > MAX_PROVIDER_RESPONSE_BYTES:
         raise ProviderError("PROVIDER_RESPONSE_TOO_LARGE")

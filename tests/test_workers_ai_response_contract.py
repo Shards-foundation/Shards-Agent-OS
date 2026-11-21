@@ -6,10 +6,12 @@ from __future__ import annotations
 
 import json
 import os
+import socket
+import threading
 import unittest
 from unittest.mock import patch
 
-from shards_agent_os.qwen_provider import ProviderError, WorkersAIProvider
+from shards_agent_os.qwen_provider import ProviderError, WorkersAIProvider, _post_json
 
 
 class _FakeResponse:
@@ -116,6 +118,54 @@ class WorkersAIResponseContractTests(unittest.TestCase):
         ):
             with self.subTest(result=result), self.assertRaises(ProviderError):
                 self.complete(result)
+
+
+class ProviderTransportFailureTests(unittest.TestCase):
+    """Real loopback sockets: an elapsed deadline is not a network outage."""
+
+    def setUp(self):
+        self.server = socket.socket()
+        self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.server.bind(("127.0.0.1", 0))
+        self.server.listen(4)
+        self.port = self.server.getsockname()[1]
+        self.accepted = []
+        threading.Thread(target=self._accept_and_stall, daemon=True).start()
+
+    def tearDown(self):
+        self.server.close()
+        for connection in self.accepted:
+            connection.close()
+
+    def _accept_and_stall(self):
+        while True:
+            try:
+                connection, _ = self.server.accept()
+            except OSError:
+                return
+            self.accepted.append(connection)
+
+    def _post(self, url, timeout_s):
+        with patch.dict(os.environ, {"no_proxy": "*", "NO_PROXY": "*"}):
+            with self.assertRaises(ProviderError) as raised:
+                _post_json(url, {"a": 1}, {}, timeout_s)
+        return raised.exception.code
+
+    def test_a_stalled_response_is_reported_as_a_timeout(self):
+        self.assertEqual(self._post(f"http://127.0.0.1:{self.port}/run", 1.0),
+                         "PROVIDER_TIMEOUT")
+
+    def test_a_refused_connection_is_still_unreachable(self):
+        probe = socket.socket()
+        probe.bind(("127.0.0.1", 0))
+        closed_port = probe.getsockname()[1]
+        probe.close()
+        self.assertEqual(self._post(f"http://127.0.0.1:{closed_port}/run", 1.0),
+                         "PROVIDER_UNREACHABLE")
+
+    def test_an_unresolvable_host_is_unreachable(self):
+        self.assertEqual(self._post("https://no-such-host.invalid/run", 2.0),
+                         "PROVIDER_UNREACHABLE")
 
 
 if __name__ == "__main__":
