@@ -1,0 +1,32 @@
+[Unit]
+Description=Shards staging signed kernel
+
+[Service]
+Type=exec
+User=shards-stage-kernel
+Group=shards-stage-kernel
+UMask=0077
+StateDirectory=shards-stage-kernel
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/shards-stage-kernel
+EnvironmentFile=/etc/shards-agent-stage/kernel.env
+ExecStart=/opt/shards-agent-stage/venv/bin/python -I -m shards_kernel serve --config /etc/shards-agent-stage/operator.json
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET
+IPAddressDeny=any
+IPAddressAllow=localhost
+SocketBindDeny=any
+SocketBindAllow=ipv4:tcp:18765
+
+[Install]
+WantedBy=multi-user.target

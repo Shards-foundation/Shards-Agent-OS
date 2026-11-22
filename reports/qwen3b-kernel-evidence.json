@@ -1,0 +1,85 @@
+{
+  "stages": [
+    {
+      "stage": "importing",
+      "ts": 1795148974.837591
+    },
+    {
+      "stage": "loading_model",
+      "ts": 1795148974.9003594,
+      "model": "Qwen/Qwen2.5-3B-Instruct"
+    },
+    {
+      "stage": "model_loaded",
+      "ts": 1795148974.900587
+    },
+    {
+      "stage": "probe",
+      "ts": 1795149010.501981,
+      "variant": "json_hint",
+      "parsed": true,
+      "tool": "kernel.echo",
+      "arguments": {
+        "text": "governed-qwen-verified"
+      }
+    },
+    {
+      "stage": "probe",
+      "ts": 1795149019.5159214,
+      "variant": "tool_first",
+      "parsed": true,
+      "tool": null,
+      "arguments": null
+    },
+    {
+      "stage": "probe_chosen",
+      "ts": 1795149019.516245,
+      "variant": "json_hint"
+    },
+    {
+      "stage": "kernel_ready",
+      "ts": 1795149019.8612106,
+      "port": 44125
+    },
+    {
+      "stage": "running_turn",
+      "ts": 1795149019.9053714,
+      "question": "Use the kernel.echo tool with exactly the argument {\"text\": \"governed-qwen-verified\"} and then tell me what it returned."
+    },
+    {
+      "stage": "turn_complete",
+      "ts": 1795149036.807464,
+      "status": "SUCCEEDED",
+      "provider": "local-transformers",
+      "model": "Qwen/Qwen2.5-3B-Instruct",
+      "model_latency_ms": 15244,
+      "reply": "The result from the echo operation was: governed-qwen-verified\n\nThe reference echo tool returned 'governed-qwen-verified'.",
+      "tool_name": "kernel.echo",
+      "tool_status": "SUCCEEDED",
+      "job_id": "ecf9a4ca5d03413cb4340d0d2ef0e1f0",
+      "error_code": null,
+      "receipt_kinds": [
+        "model.call",
+        "tool.authorised",
+        "tool.result"
+      ],
+      "tool_decision": "ALLOW",
+      "tool_result": "governed-qwen-verified"
+    },
+    {
+      "stage": "verdict",
+      "ts": 1795149036.8077266,
+      "pass_": true,
+      "wall_seconds": 62.0
+    },
+    {
+      "stage": "error",
+      "ts": 1795149036.8090498,
+      "error": "SystemExit",
+      "message": "0",
+      "traceback": "Traceback (most recent call last):\n  File \"/tmp/qwen3b_e2e.py\", line 112, in <module>\n    sys.exit(0 if ok else 1)\n    ~~~~~~~~^^^^^^^^^^^^^^^^\nSystemExit: 0\n",
+      "wall_seconds": 62.0
+    }
+  ],
+  "final_stage": "error"
+}

@@ -1,0 +1,57 @@
+name: Staging origin on Ubuntu ARM64
+on:
+  pull_request:
+    paths:
+      - 'deploy/oracle/**'
+      - 'scripts/ci_stage_services.py'
+      - 'scripts/ci_private_https.py'
+      - 'tests/agent_fixtures.py'
+      - 'src/shards_agent_os/**'
+      - 'pyproject.toml'
+      - '.github/workflows/staging-arm64.yml'
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Staging check to run
+        type: choice
+        options: [services, https]
+        default: services
+permissions:
+  contents: read
+jobs:
+  stage-services:
+    if: github.event_name != 'workflow_dispatch' || inputs.suite == 'services'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install the origin and published signed kernel on a clean hosted VM
+        run: |
+          test "$(uname -m)" = aarch64
+          sudo apt-get update -qq
+          sudo apt-get install -y python3-venv
+          sudo /usr/bin/python3 -m venv /opt/shards-agent-stage/venv
+          sudo /opt/shards-agent-stage/venv/bin/pip install '.[kernel]'
+          sudo /opt/shards-agent-stage/venv/bin/pip check
+          sudo systemd-sysusers "$PWD/deploy/oracle/accounts.conf"
+          sudo deploy/oracle/install-units.sh
+          sudo deploy/oracle/install-units.sh
+          sudo systemd-analyze verify /etc/systemd/system/shards-stage-{kernel,origin}.service
+      - name: Verify real services, separate identities and durable replay refusal
+        run: sudo env RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" /opt/shards-agent-stage/venv/bin/python -m scripts.ci_stage_services
+  private-https:
+    if: github.event_name != 'workflow_dispatch' || inputs.suite == 'https'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install the standalone HTTP server binary
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends apache2-bin
+      - name: Verify the dedicated TLS unit and rollback using a recording upstream
+        run: sudo env RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" /usr/bin/python3 -m scripts.ci_private_https --systemd

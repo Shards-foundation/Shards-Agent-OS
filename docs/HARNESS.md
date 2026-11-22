@@ -53,9 +53,14 @@ The harness never automatically replays an ambiguous operation.
 
 ## Current limitations
 
-- Only the existing kernel-governed echo and add tools are allowed.
+- Only the existing kernel-governed echo and add tools, plus the separately
+  documented read-only GitHub observation, are allowed.
 - Maximum 32 ordered steps. No DAG, planner, LLM, GitHub writer, wallet
   control, cloud service, cron issuer, or multi-host execution.
+- The harness is not a task-review engine. Task and step states are execution
+  states; they are not `APPROVE`/`REQUEST_CHANGES`/`DENY` verdicts, and no
+  `PRESERVE`/`REJECT` disposition exists. See
+  [the task review contract](TASK_REVIEW_CONTRACT.md).
 - This code relies on the existing Agent OS private SQLite schema.
 - The signed local operator and independent permit issuer must exist separately.
 - Kernel evidence is the execution authority. A harness status snapshot is

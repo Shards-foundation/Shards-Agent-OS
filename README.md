@@ -39,6 +39,11 @@ python -m shards_kernel demo --json
 
 CI also runs an ephemeral signed real-process local operator + MCP call + replay refusal check. That CI test is evidence for the local reference path, **not** production deployment readiness.
 
+## Hosted Qwen inference
+
+See [Hugging Face inference acceptance](docs/HUGGING_FACE_INFERENCE.md) for the
+OpenAI-compatible adapter configuration and offline tests.
+
 ## Run one authorised job
 
 An **independent operator** must provision the signed v2 operator, agent-scoped token and one-use permit as specified in the [Shards-Kernel agent quickstart](https://github.com/Shards-foundation/Shards-kernel/blob/main/docs/AGENT_QUICKSTART.md). The OS runtime must not receive operator API keys, signing keys or permission to issue permits.

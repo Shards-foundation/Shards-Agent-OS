@@ -1,0 +1,10 @@
+name = "shards-agent-os-oracle-staging"
+main = "edge.mjs"
+compatibility_date = "2026-10-01"
+workers_dev = false
+preview_urls = false
+
+# Supply the real isolated VPC service ID in the staging configuration.
+# [[vpc_services]]
+# binding = "AGENT_OS_ORIGIN"
+# service_id = "<existing isolated HTTPS service ID>"
