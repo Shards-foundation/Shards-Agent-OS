@@ -252,14 +252,31 @@ class OpenAICompatibleProvider:
             ],
             "max_tokens": self.max_tokens,
             "temperature": 0.1,
+            "stream": False,
         }
         started = time.monotonic()
         decoded = _post_json(f"{self.base_url}/chat/completions", payload, headers, timeout_s)
         choices = decoded.get("choices")
-        if type(choices) is not list or not choices or type(choices[0]) is not dict:
+        if type(choices) is not list or len(choices) != 1 or type(choices[0]) is not dict:
             raise ProviderError("PROVIDER_INVALID_JSON")
-        message = choices[0].get("message")
-        text = _extract_text(message)
+        choice = choices[0]
+        finish_reason = choice.get("finish_reason")
+        if finish_reason == "length":
+            raise ProviderError("PROVIDER_INCOMPLETE_REPLY")
+        if finish_reason == "content_filter":
+            raise ProviderError("PROVIDER_REFUSED")
+        message = choice.get("message")
+        if type(message) is not dict or message.get("role") != "assistant":
+            raise ProviderError("PROVIDER_INVALID_JSON")
+        if (finish_reason in ("tool_calls", "function_call")
+                or message.get("tool_calls") not in (None, [])
+                or message.get("function_call") is not None):
+            raise ProviderError("PROVIDER_UNSUPPORTED_TOOL_CALL")
+        if message.get("refusal"):
+            raise ProviderError("PROVIDER_REFUSED")
+        if finish_reason != "stop":
+            raise ProviderError("PROVIDER_INVALID_JSON")
+        text = _extract_text(message.get("content"))
         return ModelReply(
             text=text, provider=self.name, model=self.model,
             latency_ms=int((time.monotonic() - started) * 1000),
